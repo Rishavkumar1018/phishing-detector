@@ -11,3 +11,10 @@ logs/
 venv/
 .env
 config/dev_key.txt
+
+AUDIT_NOTES.md
+MODEL_EVALUATION.md
+SECURITY_ASSESSMENT.md
+bulk_check_results.csv
+run.txt
+testcases.txt
