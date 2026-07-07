@@ -1,0 +1,6 @@
+" venv\Scripts\Activate.ps1  "
+"  uvicorn app.main:app --reload --port 8000 "
+
+python -c "from core.auth import get_or_create_dev_key; print(get_or_create_dev_key())"
+HxyW22Jtjde_xX2xJZ5dnlxZJrFD-SBS
+"  http://localhost:8000/dev/bulk "

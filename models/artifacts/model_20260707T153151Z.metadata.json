@@ -1,0 +1,70 @@
+{
+  "version": "20260707T153151Z",
+  "preprocessor_path": "/home/claude/phishing_detector/models/artifacts/preprocessor_20260707T153151Z.joblib",
+  "xgb_model_path": "/home/claude/phishing_detector/models/artifacts/model_20260707T153151Z.ubj",
+  "trained_at_utc": "2026-07-07T15:31:51.141374+00:00",
+  "training_data_file": "/mnt/user-data/uploads/PhiUSIIL_Phishing_URL_Dataset.csv",
+  "training_data_sha256_prefix": "23c2f7803a9c4c3e",
+  "n_train_rows": 192340,
+  "n_test_rows": 47159,
+  "feature_names": [
+    "url_length",
+    "domain_length",
+    "path_length",
+    "query_length",
+    "num_dots",
+    "num_hyphens",
+    "num_underscores",
+    "num_slashes",
+    "num_digits",
+    "num_letters",
+    "digit_ratio",
+    "letter_ratio",
+    "num_special_chars",
+    "special_char_ratio",
+    "num_subdomains",
+    "is_ip_address",
+    "is_https",
+    "tld_length",
+    "num_equals",
+    "num_question_marks",
+    "num_ampersands",
+    "num_percent_encoded",
+    "has_obfuscation",
+    "domain_entropy",
+    "has_at_symbol",
+    "num_path_segments",
+    "suspicious_keyword_count",
+    "has_port",
+    "is_common_tld",
+    "has_mixed_script",
+    "is_punycode",
+    "num_confusable_chars",
+    "confusable_char_ratio",
+    "domain_has_obfuscated_suspicious_term"
+  ],
+  "text_feature": "_path_query_text (path+query only, char 3-5 grams, max 2000 features)",
+  "label_convention": "1 = phishing, 0 = benign",
+  "metrics": {
+    "roc_auc": 0.9924092520343488,
+    "phishing_precision": 0.9903909371364993,
+    "phishing_recall": 0.9699836544653029,
+    "confusion_matrix": [
+      [
+        26780,
+        190
+      ],
+      [
+        606,
+        19583
+      ]
+    ]
+  },
+  "known_limitations": [
+    "Trained only on PhiUSIIL; no live WHOIS/DNS/TLS signal (see models/dataset_small_model for that, kept separate).",
+    "COMMON_TLDS and SUSPICIOUS_PATH_KEYWORDS are small curated lists - expand via config, not by editing code.",
+    "No content/rendering features by design (WAF-safety tradeoff) - see AUDIT_NOTES.md.",
+    "Training augmented with 144 real benign URLs across ~94 distinct domains (x8 replication, reduced from 40x after a 100K-URL evaluation proved high replication of a small set causes memorization, not generalization - see AUDIT_NOTES.md 3.17) because PhiUSIIL's legitimate class is 100% bare-homepage URLs with zero real-path examples - see AUDIT_NOTES.md. Still not a full fix; expanding this set further remains the highest-value next step.",
+    "Training also augmented with 1912 synthetic character-substitution/homoglyph phishing examples and 640 legitimate numeric-brand counter-examples (core/wordplay_training_data.py) - see AUDIT_NOTES.md 3.15."
+  ]
+}
