@@ -92,3 +92,15 @@ Free tier spins down after ~15 minutes idle; the first request after
 that takes 20-60 seconds to wake up, then runs normally.
 
 ## Project layout
+core/features.py      URL -> feature extraction (single source of truth,
+used identically by training and serving)
+core/registry.py       loads the current trained model
+core/lists.py           allowlist/blocklist checks
+core/typosquat.py       brand-similarity / typosquat detection
+core/wordplay.py        character-substitution and homoglyph detection
+core/auth.py            developer-key auth for bulk checking
+config/*.json           allowlist/blocklist data
+models/train.py         training script
+models/artifacts/       trained model files (included in this repo)
+app/main.py             web app + API
+tests/                  automated tests
