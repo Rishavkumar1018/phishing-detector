@@ -1,81 +1,30 @@
-# Phishing URL Detector v2
+# Phishing URL Detector
 
-Rebuilt from a technical audit of a prior version, then hardened against
-an independent red-team security assessment and a 100,000-URL model
-evaluation (both non-destructive, both run via Claude Code). **Read
-`AUDIT_NOTES.md` first** — §3.16-3.18 cover the latest round: a HIGH
-event-loop-blocking DoS fix, CSV-injection fix, a real typosquat bug
-(`mail.*` subdomains flagged as Gmail impersonation) found and fixed, and
-a from-scratch augmentation-data overhaul after proof the old approach
-was memorizing training strings rather than generalizing. This README is
-just "how do I run it."
+A machine-learning-based system that checks whether a URL is likely
+phishing or legitimate, with a simple web checker and a browser
+extension that checks sites automatically.
 
-## Bulk checking (developer-only)
+## What's in this repo
 
-Visit `http://localhost:8000/dev/bulk`. On first use, check your terminal
-output for a line like:
+- **`core/`** — the detection logic: feature extraction, the allowlist/
+  typosquat/wordplay checks that run before the ML model, and model
+  loading.
+- **`app/`** — the FastAPI web app: a simple checker page, an API, and a
+  developer-only bulk-checking tool.
+- **`models/`** — training script and the trained model files.
+- **`config/`** — allowlist/blocklist seed data.
+- **`tests/`** — automated tests covering the detection logic end to end.
 
-```
-[phishing_detector] Dev key: aB3xY...
-```
+## How it works
 
-(This is auto-generated on first run and saved to `config/dev_key.txt`,
-which is gitignored — never committed, never hardcoded.) Paste that key
-into the page's "Dev key" field, then either upload a `.txt` (one URL per
-line) or `.csv` (with a `url` column) file, or paste URLs directly. Results
-download as a CSV. Capped at 5000 URLs per request; batched internally so
-even a few thousand URLs check in well under a second.
+Every URL passes through a few stages, in order, stopping at the first
+one that makes a decision:
 
-The same endpoints are scriptable directly:
-```bash
-curl -X POST http://localhost:8000/api/bulk-check \
-  -H "X-Dev-Key: <your key>" -H "Content-Type: application/json" \
-  -d '{"urls": ["https://example.com/", "https://sbl.co.in/"]}'
-```
-
-## Browser extension (auto-checks every site you visit)
-
-The `extension/` folder is a Manifest V3 Chrome extension that checks every
-site you navigate to, automatically, before it loads — see
-`extension/README.md` for what each file does and how to load it.
-
-**It needs a backend it can reach over the internet** (not `localhost` —
-that only works while your PC is on and the server running). Deploy to
-Render's free tier:
-
-1. **Push this project to GitHub** (if you haven't already):
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   ```
-   Create a new repo on github.com, then follow its "push an existing
-   repository" instructions to connect and push.
-
-2. **Sign up at [render.com](https://render.com)** (free, no credit card needed for the free tier) — sign in with GitHub for the easiest setup.
-
-3. **New → Web Service** → connect your GitHub repo. Render should
-   auto-detect the `render.yaml` in this project and pre-fill the build/start
-   commands. If not, set them manually:
-   - Build command: `pip install -r requirements.txt`
-   - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-
-4. **(Optional) Set an environment variable** `PHISHING_DETECTOR_DEV_KEY` to
-   a password of your choice, so bulk-checking works on the deployed
-   version with a key you control (otherwise one gets auto-generated per
-   deploy and printed in Render's logs, which is less convenient to find
-   repeatedly).
-
-5. **Deploy.** Render gives you a URL like `https://phishing-detector-xyz.onrender.com`.
-   Free tier spins down after ~15 min idle — the first request after that
-   can take 20-60 seconds while it wakes back up; after that it's normal speed.
-
-6. **Test it**: visit `https://your-url.onrender.com/health` in a browser —
-   should show `{"status":"ok","model_version":"..."}`.
-
-7. **Point the extension at it**: load the extension (see
-   `extension/README.md`), open its Settings, paste your Render URL into
-   "Backend URL", save.
+1. **Blocklist** — known-bad domains, instant reject
+2. **Allowlist** — known-good domains, instant pass
+3. **Typosquat check** — catches domains that closely resemble a known
+   brand (e.g. a one-character typo of a real bank's domain)
+4. **ML model** — everything else gets scored by a trained classifier
 
 ## Setup
 
@@ -83,17 +32,17 @@ Render's free tier:
 pip install -r requirements.txt
 ```
 
-## Train
+## Train (optional — a trained model is already included)
 
 ```bash
 python models/train.py
 ```
 
-Reads PhiUSIIL's raw URLs from `/mnt/user-data/uploads/`, extracts features
-via `core/features.py` (the single canonical implementation), augments the
-training split with real benign-with-path URLs (see AUDIT_NOTES.md §3.4),
-fits one bundled sklearn Pipeline, and writes a versioned artifact to
-`models/artifacts/` plus a `current.json` pointer.
+By default this expects a copy of the PhiUSIIL Phishing URL dataset (a
+public dataset available on Kaggle) at a path you set inside
+`models/train.py` — update `DATA_PATH` near the top of that file to
+wherever you save it locally. You only need this if you want to retrain;
+the repo already ships a working trained model in `models/artifacts/`.
 
 ## Serve
 
@@ -101,8 +50,25 @@ fits one bundled sklearn Pipeline, and writes a versioned artifact to
 uvicorn app.main:app --reload --port 8000
 ```
 
-Visit `http://localhost:8000/`. `POST /api/check {"url": "..."}` returns
-`{checked_url, verdict, stage, confidence, model_version}`.
+Visit `http://localhost:8000/` for the checker page. Or call the API
+directly:
+
+```bash
+curl -X POST http://localhost:8000/api/check \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/"}'
+```
+
+Returns `{checked_url, verdict, stage, confidence, model_version}`.
+
+## Bulk checking (developer-only)
+
+Visit `http://localhost:8000/dev/bulk`. On first use, check your terminal
+output for a line like:[phishing_detector] Dev key: aB3xY...
+This is auto-generated on first run and saved locally — never committed
+to this repo. Paste that key into the page's "Dev key" field, then upload
+a `.txt` (one URL per line) or `.csv` (with a `url` column), or paste
+URLs directly. Results download as a CSV.
 
 ## Test
 
@@ -110,27 +76,19 @@ Visit `http://localhost:8000/`. `POST /api/check {"url": "..."}` returns
 pytest tests/ -v
 ```
 
-`test_regression_known_sites.py` is the CI gate — it includes the exact
-URLs that were wrong in the legacy system (`perplexity.ai`, `discord.com`,
-`india.gov.in`, `icici.bank.in`) plus more known-benign sites and synthetic
-suspicious-structure cases. A failure here should block deploy.
-`test_feature_parity.py` guards against training and serving code ever
-forking apart again.
+## Deploying (for the browser extension / public access)
+
+The extension needs a backend reachable over the internet, not just
+`localhost`. To deploy for free on [Render](https://render.com):
+
+1. Push this repo to GitHub (already done if you're reading this on GitHub)
+2. Sign up at render.com, sign in with GitHub
+3. **New → Web Service** → connect this repo
+4. Build command: `pip install -r requirements.txt`
+5. Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+6. Deploy — Render gives you a URL like `https://your-app.onrender.com`
+
+Free tier spins down after ~15 minutes idle; the first request after
+that takes 20-60 seconds to wake up, then runs normally.
 
 ## Project layout
-
-```
-core/features.py       single source of truth for URL -> features
-core/registry.py        versioned model loading, absolute paths only
-core/lists.py            allowlist/blocklist, config-driven
-core/typosquat.py        brand-similarity detection (e.g. sbl.co.in vs sbi.co.in)
-core/wordplay.py          general character-substitution/homoglyph detection
-core/wordplay_training_data.py   synthetic training data for the above
-core/auth.py             dev-key auth for bulk checking
-config/*.json            seed lists (replace with live feeds in prod)
-models/train.py          training script
-models/artifacts/        versioned model + metadata (gitignored in practice)
-app/main.py               FastAPI serving layer + frontend
-tests/                    regression + parity tests
-AUDIT_NOTES.md            full findings writeup - read this
-```
