@@ -14,3 +14,6 @@ config/dev_key.txt
 data/
 # Large redistributable dataset (get PhiUSIIL from Kaggle); see README
 dataset/
+
+x/
+APPLY_INSTRUCTIONS.txt
