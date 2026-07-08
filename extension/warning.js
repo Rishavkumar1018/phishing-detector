@@ -32,6 +32,6 @@ function proceedAnyway() {
 }
 
 // MV3 pages run under CSP script-src 'self', which blocks inline onclick
-// handlers. Wire the buttons up here instead (see PROJECT_REVIEW.md 1.2).
+// handlers. Wire the buttons up here instead .
 document.getElementById("backBtn").addEventListener("click", goBack);
 document.getElementById("proceedBtn").addEventListener("click", proceedAnyway);

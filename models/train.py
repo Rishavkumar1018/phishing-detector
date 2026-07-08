@@ -2,7 +2,7 @@
 models/train.py
 ================
 Builds the training matrix by calling core.features.extract_features_batch
-on RAW URLs (not the pre-computed PhiUSIIL columns - see AUDIT_NOTES.md for
+on RAW URLs (not the pre-computed PhiUSIIL columns for
 why those can't be trusted to reproduce at serve time).
 
 Bundles numeric features + a path/query-only TF-IDF vectorizer + the
@@ -28,14 +28,15 @@ from sklearn.metrics import classification_report, roc_auc_score, confusion_matr
 from xgboost import XGBClassifier
 import joblib
 
-from core.features import extract_features_batch, FEATURE_NAMES
+from core.features import extract_features_batch, FEATURE_NAMES, feature_constants_fingerprint
 from core.augmentation_data import REAL_BENIGN_URLS_WITH_PATHS, REAL_BENIGN_ROOT_URLS_WITH_TRAILING_SLASH
 from core.wordplay_training_data import generate_phishing_examples, generate_legitimate_counter_examples
+from models.evaluate import _evaluate_realistic_heldout
 
 ROOT = Path(__file__).resolve().parents[1]
 # Dataset lives in the repo at dataset/PhiUSIIL_Phishing_URL_Dataset.csv,
-# resolved from repo root (never a hardcoded absolute path - see
-# PROJECT_REVIEW.md 1.3). Override with the PHISHING_DETECTOR_DATASET env
+# resolved from repo root (never a hardcoded absolute path).
+# Override with the PHISHING_DETECTOR_DATASET env
 # var if your copy is elsewhere.
 DATA_PATH = Path(
     os.environ.get(
@@ -48,8 +49,7 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 RANDOM_STATE = 42
 # v2 (2026-07-07): reduced from 40x after a 100,000-URL evaluation proved
 # high replication of a small set causes MEMORIZATION, not generalization
-# (see AUDIT_NOTES.md 3.17 and core/augmentation_data.py's module
-# docstring for the matched-pair evidence). The augmentation set itself
+# (see core/augmentation_data.py's module docstring for the matched-pair evidence). The augmentation set itself
 # grew from ~69 to ~144 URLs across ~94 distinct domains specifically so
 # a much lower replication multiplier still gives the signal real weight.
 AUGMENTATION_REPLICATION = 8
@@ -74,7 +74,7 @@ def build_training_frame() -> tuple[pd.DataFrame, pd.Series]:
 
 def build_augmentation_frame() -> tuple[pd.DataFrame, pd.Series]:
     """Real, search-sourced legitimate URLs that DO have a path, plus
-    real bare-root URLs with a trailing slash - see AUDIT_NOTES.md for why
+    real bare-root URLs with a trailing slash for why
     PhiUSIIL alone can't teach the model either of these are normal."""
     urls = (REAL_BENIGN_URLS_WITH_PATHS + REAL_BENIGN_ROOT_URLS_WITH_TRAILING_SLASH) * AUGMENTATION_REPLICATION
     X_aug = extract_features_batch(urls)
@@ -89,7 +89,7 @@ WORDPLAY_BENIGN_REPLICATION = 40
 def build_wordplay_augmentation_frame() -> tuple[pd.DataFrame, pd.Series]:
     """Synthetic character-substitution/homoglyph phishing examples plus
     legitimate numeric-brand counter-examples - see
-    core/wordplay_training_data.py and AUDIT_NOTES.md 3.15."""
+    core/wordplay_training_data.py for the generator and the templates used."""
     phishing_urls = generate_phishing_examples() * WORDPLAY_PHISHING_REPLICATION
     benign_urls = generate_legitimate_counter_examples() * WORDPLAY_BENIGN_REPLICATION
     X_phish = extract_features_batch(phishing_urls)
@@ -183,6 +183,7 @@ def main():
         "n_train_rows": len(X_train),
         "n_test_rows": len(X_test),
         "feature_names": numeric_cols,
+        "feature_constants_fingerprint": feature_constants_fingerprint(),
         "text_feature": "_path_query_text (path+query only, char 3-5 grams, max 2000 features)",
         "label_convention": "1 = phishing, 0 = benign",
         "metrics": {
@@ -191,20 +192,32 @@ def main():
             "phishing_recall": float(classification_report(y_test, preds, output_dict=True)["1"]["recall"]),
             "confusion_matrix": cm.tolist(),
         },
+        # the metrics above are measured on
+        # PhiUSIIL's own test split, which has the SAME distribution
+        # artifacts (100% bare-homepage benign class, 100% www-prefixed)
+        # training worked around - they measure performance on an
+        # artifact-laden distribution, not real traffic. This is the
+        # counterpart measured on models/evaluate.py's genuinely held-out
+        # set (fresh search results + freshly-written phishing patterns,
+        # disjoint from every URL used anywhere in training). Concretely
+        # confirmed the gap this finding predicted: 98.3% PhiUSIIL-test
+        # accuracy vs 73.5% realistic-heldout accuracy on the run that
+        # added this field for the full writeup.
+        "realistic_heldout_metrics": _evaluate_realistic_heldout(pipeline),
         "known_limitations": [
             "Trained only on PhiUSIIL; no live WHOIS/DNS/TLS signal (see models/dataset_small_model for that, kept separate).",
             "COMMON_TLDS and SUSPICIOUS_PATH_KEYWORDS are small curated lists - expand via config, not by editing code.",
-            "No content/rendering features by design (WAF-safety tradeoff) - see AUDIT_NOTES.md.",
+            "No content/rendering features by design (WAF-safety tradeoff)",
             f"Training augmented with {len(REAL_BENIGN_URLS_WITH_PATHS) + len(REAL_BENIGN_ROOT_URLS_WITH_TRAILING_SLASH)} "
             f"real benign URLs across ~94 distinct domains (x{AUGMENTATION_REPLICATION} replication, reduced "
             "from 40x after a 100K-URL evaluation proved high replication of a small set causes "
-            "memorization, not generalization - see AUDIT_NOTES.md 3.17) because PhiUSIIL's legitimate "
-            "class is 100% bare-homepage URLs with zero real-path examples - see AUDIT_NOTES.md. Still "
+            "memorization, not generalization) because PhiUSIIL's legitimate "
+            "class is 100% bare-homepage URLs with zero real-path examples Still "
             "not a full fix; expanding this set further remains the highest-value next step.",
             f"Training also augmented with {len(generate_phishing_examples())*WORDPLAY_PHISHING_REPLICATION} "
             "synthetic character-substitution/homoglyph phishing examples and "
             f"{len(generate_legitimate_counter_examples())*WORDPLAY_BENIGN_REPLICATION} legitimate "
-            "numeric-brand counter-examples (core/wordplay_training_data.py) - see AUDIT_NOTES.md 3.15.",
+            "numeric-brand counter-examples (core/wordplay_training_data.py)",
         ],
     }
     meta_path = MODEL_DIR / f"model_{version}.metadata.json"

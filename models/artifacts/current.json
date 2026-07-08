@@ -1,6 +1,6 @@
 {
-  "version": "20260707T153151Z",
-  "preprocessor_file": "preprocessor_20260707T153151Z.joblib",
-  "xgb_model_file": "model_20260707T153151Z.ubj",
-  "metadata_file": "model_20260707T153151Z.metadata.json"
+  "version": "20260708T091116Z",
+  "preprocessor_file": "preprocessor_20260708T091116Z.joblib",
+  "xgb_model_file": "model_20260708T091116Z.ubj",
+  "metadata_file": "model_20260708T091116Z.metadata.json"
 }

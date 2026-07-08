@@ -1,7 +1,7 @@
 """
 tests/test_p1_fixes.py
 ========================
-Regression tests for PROJECT_REVIEW.md P1 tier: 1.4 (extension privacy -
+Regression tests for the P1 tier: 1.4 (extension privacy -
 query string stripping, tested via a lightweight Node script since it's
 JS, not Python), 2.1 (list cache thrash), 2.4 (XSS via innerHTML - source
 inspection since real XSS needs a browser), 4.5 (web_accessible_resources
@@ -17,7 +17,7 @@ import pytest
 
 
 def test_lists_cache_actually_caches():
-    """PROJECT_REVIEW.md 2.1: @lru_cache(maxsize=1) with two distinct keys
+    """@lru_cache(maxsize=1) with two distinct keys
     ('allowlist', 'blocklist') means each call evicts the other - measured
     CacheInfo(hits=0, misses=4) after two full check cycles. Fixed by
     maxsize=None."""
@@ -33,13 +33,13 @@ def test_lists_cache_actually_caches():
 
 
 def test_manifest_does_not_expose_warning_page_to_web():
-    """PROJECT_REVIEW.md 4.5: warning.html in web_accessible_resources for
+    """warning.html in web_accessible_resources for
     <all_urls> lets any website fingerprint the extension and navigate
     users to a fake-looking warning with attacker-chosen url/note params.
     The extension navigates to it itself via chrome.tabs.update, which
     doesn't require web-accessibility."""
     manifest = json.loads(Path(__file__).resolve().parents[1].joinpath(
-        "extension", "manifest.json").read_text())
+        "extension", "manifest.json").read_text(encoding="utf-8"))
     assert "web_accessible_resources" not in manifest or not manifest["web_accessible_resources"], (
         "warning.html should not be web-accessible; "
         "chrome.tabs.update from the background script works without it"
@@ -47,16 +47,16 @@ def test_manifest_does_not_expose_warning_page_to_web():
 
 
 def test_release_script_excludes_secrets_and_large_files():
-    """PROJECT_REVIEW.md 5.6: package_release.sh excludes less than
+    """package_release.sh excludes less than
     .gitignore does - a release tarball built from a working directory
     ships the secret dev key, the venv, and the dataset."""
-    script = Path(__file__).resolve().parents[1].joinpath("scripts", "package_release.sh").read_text()
+    script = Path(__file__).resolve().parents[1].joinpath("scripts", "package_release.sh").read_text(encoding="utf-8")
     for required_exclude in ["venv", "dev_key.txt", "dataset", ".env"]:
         assert required_exclude in script, f"package_release.sh does not exclude '{required_exclude}'"
 
 
 def test_extension_strips_query_string_before_sending():
-    """PROJECT_REVIEW.md 1.4: every top-level navigation - full URL
+    """every top-level navigation - full URL
     including query strings (which routinely contain search terms,
     session tokens, password-reset links) - was POSTed to the backend.
     Fixed (option 1, the review's recommendation): strip query/fragment
@@ -106,35 +106,44 @@ def test_background_js_strips_query_string_before_sending():
     """Always runs, no Node required: confirms background.js's real
     source actually calls query-string stripping before the fetch to the
     backend - this is the regression guard that matters day to day."""
-    bg_js = Path(__file__).resolve().parents[1].joinpath("extension", "background.js").read_text()
+    bg_js = Path(__file__).resolve().parents[1].joinpath("extension", "background.js").read_text(encoding="utf-8")
     assert "pathname" in bg_js, "background.js does not appear to strip query strings before sending"
     assert "stripForPrivacy" in bg_js, "expected stripForPrivacy() function not found in background.js"
 
 
 def test_no_raw_unescaped_interpolation_in_served_html():
-    """PROJECT_REVIEW.md 2.4: checked_url/note (attacker-controlled text -
+    """checked_url/note (attacker-controlled text -
     literally the use case, checking suspicious URLs) were interpolated
     raw into innerHTML via template literals, in both the dev bulk page
     and the public index page. An escape helper must be defined and used
-    for every field derived from the check response."""
-    main_py = Path(__file__).resolve().parents[1].joinpath("app", "main.py").read_text()
-    assert "function escapeHtml" in main_py or "escapeHtml(" in main_py, (
-        "No HTML-escaping helper found in app/main.py's embedded JS"
-    )
-    # Every place checked_url/note get interpolated into an innerHTML
-    # template literal must go through escapeHtml(...), not raw ${...}
+    for every field derived from the check response.
+
+    Checks app/static/index.html and app/static/bulk.html directly - this
+    HTML used to be embedded as Python strings in app/main.py, moved out
+    to real static files (project review 5.7: embedded HTML in Python
+    strings isn't editable/lintable/syntax-highlighted)."""
+    static_dir = Path(__file__).resolve().parents[1].joinpath("app", "static")
+    index_html = (static_dir / "index.html").read_text(encoding="utf-8")
+    bulk_html = (static_dir / "bulk.html").read_text(encoding="utf-8")
+
     import re
-    for var in ["checked_url", "note"]:
-        raw_pattern = re.compile(r"\$\{(?:data\.|r\.)" + var + r"\}")
-        escaped_pattern = re.compile(r"escapeHtml\((?:data\.|r\.)" + var + r"\)")
-        raw_hits = raw_pattern.findall(main_py)
-        assert not raw_hits, f"Found unescaped ${{...{var}}} interpolation(s): {raw_hits}"
-        assert escaped_pattern.search(main_py), f"No escaped usage of {var} found"
+    for name, html in [("index.html", index_html), ("bulk.html", bulk_html)]:
+        assert "escapeHtml(" in html, f"No HTML-escaping helper found in {name}"
+        for var in ["checked_url", "note"]:
+            raw_pattern = re.compile(r"\$\{(?:data\.|r\.)" + var + r"\}")
+            escaped_pattern = re.compile(r"escapeHtml\((?:data\.|r\.)" + var + r"\)")
+            raw_hits = raw_pattern.findall(html)
+            assert not raw_hits, f"Found unescaped ${{...{var}}} interpolation(s) in {name}: {raw_hits}"
+        # both fields should actually be escaped somewhere in each file
+        checked_url_escaped = re.search(r"escapeHtml\((?:data\.|r\.)checked_url\)", html)
+        note_escaped = re.search(r"escapeHtml\((?:data\.|r\.)note\)", html)
+        assert checked_url_escaped, f"checked_url is never passed through escapeHtml() in {name}"
+        assert note_escaped, f"note is never passed through escapeHtml() in {name}"
 
 
 def test_popup_js_escapes_note_field():
     """Same XSS pattern in the extension popup - result.note is
     backend-controlled today (low risk) but one compromised backend away
     from XSS inside the extension's own privileged popup context."""
-    popup_js = Path(__file__).resolve().parents[1].joinpath("extension", "popup.js").read_text()
+    popup_js = Path(__file__).resolve().parents[1].joinpath("extension", "popup.js").read_text(encoding="utf-8")
     assert "escapeHtml(" in popup_js, "popup.js does not escape result.note before innerHTML"

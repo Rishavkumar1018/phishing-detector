@@ -7,7 +7,7 @@ Unicode homoglyphs (Cyrillic "а" standing in for Latin "a" - the classic
 IDN homograph attack), and punycode-encoded lookalike domains.
 
 Deliberately NOT a big fuzzy-match-against-a-huge-dictionary system: that
-was considered and rejected (see AUDIT_NOTES.md) because it raises false
+was considered and rejected  because it raises false
 positives on legitimate short/coincidental-looking domains without
 actually helping the domain-name case (brand names aren't in a standard
 English dictionary to begin with). Instead, normalization is applied to a

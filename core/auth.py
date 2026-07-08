@@ -31,9 +31,46 @@ ENV_VAR_NAME = "PHISHING_DETECTOR_DEV_KEY"
 # testing (30 rapid wrong-key requests all returned plain 401s with no
 # throttling). In-memory is fine for this single-instance, single-developer
 # tool; a multi-instance deployment would need a shared store instead.
+#
+# Three sub-issues fixed here:
+# (a) _request_log never deleted keys - a scanner cycling spoofed/rotating
+#     IPs grew it forever. Now purged once the table gets large.
+# (b) On Render (the documented deployment target) the app sits behind a
+#     proxy, so request.client.host was the PROXY's IP - every real client
+#     shared one bucket, and an attacker could lock the real developer out.
+#     Now reads X-Forwarded-For's first hop when APP_ENV=production (the
+#     same flag already used to gate /docs - Render is always behind a
+#     proxy, so bundling this under one existing flag avoids requiring a
+#     second env var). NOT trusted by default, since blindly trusting
+#     X-Forwarded-For when NOT actually behind a real proxy lets a client
+#     spoof any IP it wants to reset its own limit.
+# (c) the limit used to count SUCCESSFUL requests too, so a legitimate
+#     bulk-scripting session with the correct key hit 429 after 20
+#     calls/min. Now only failed auth attempts are counted - see
+#     require_dev_key below, which checks the key BEFORE touching the
+#     rate limiter at all.
 RATE_LIMIT_MAX_REQUESTS = 20
 RATE_LIMIT_WINDOW_SECONDS = 60
+STALE_CLIENT_PURGE_THRESHOLD = 10_000
 _request_log: dict[str, deque] = defaultdict(deque)
+_TRUST_PROXY_HEADERS = os.environ.get("APP_ENV", "development").lower() == "production"
+
+
+def _get_client_id(request: Request) -> str:
+    if _TRUST_PROXY_HEADERS:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _purge_stale_clients(now: float) -> None:
+    stale_ids = [
+        cid for cid, log in _request_log.items()
+        if not log or now - log[-1] > RATE_LIMIT_WINDOW_SECONDS
+    ]
+    for cid in stale_ids:
+        del _request_log[cid]
 
 
 def _check_rate_limit(client_id: str) -> None:
@@ -48,6 +85,8 @@ def _check_rate_limit(client_id: str) -> None:
                     f"per {RATE_LIMIT_WINDOW_SECONDS}s on this endpoint.",
         )
     log.append(now)
+    if len(_request_log) > STALE_CLIENT_PURGE_THRESHOLD:
+        _purge_stale_clients(now)
 
 
 def get_or_create_dev_key() -> str:
@@ -59,10 +98,10 @@ def get_or_create_dev_key() -> str:
         return env_key.strip()
 
     if KEY_PATH.exists():
-        return KEY_PATH.read_text().strip()
+        return KEY_PATH.read_text(encoding="utf-8").strip()
     key = secrets.token_urlsafe(24)
     KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    KEY_PATH.write_text(key)
+    KEY_PATH.write_text(key, encoding="utf-8")
     print(f"\n[phishing_detector] Generated new dev key at {KEY_PATH}")
     print(f"[phishing_detector] Dev key: {key}")
     print("[phishing_detector] Use this in the X-Dev-Key header for /api/bulk-check\n")
@@ -71,9 +110,14 @@ def get_or_create_dev_key() -> str:
 
 def require_dev_key(request: Request, x_dev_key: str = Header(default=None)) -> None:
     """FastAPI dependency - raises 401 if the header is missing/wrong,
-    429 if this client has exceeded the rate limit."""
-    client_id = request.client.host if request.client else "unknown"
-    _check_rate_limit(client_id)
+    429 if this client has exceeded the FAILED-attempt rate limit.
+
+    Key checked FIRST, rate limiter only touched on the failure path -
+    see 2.3(c) above for why (a correct key must never count against the
+    limit, or legitimate scripted use gets locked out)."""
     expected = get_or_create_dev_key()
-    if not x_dev_key or not secrets.compare_digest(x_dev_key, expected):
-        raise HTTPException(status_code=401, detail="Missing or invalid X-Dev-Key header.")
+    if x_dev_key and secrets.compare_digest(x_dev_key, expected):
+        return
+    client_id = _get_client_id(request)
+    _check_rate_limit(client_id)
+    raise HTTPException(status_code=401, detail="Missing or invalid X-Dev-Key header.")

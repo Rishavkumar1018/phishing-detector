@@ -1,7 +1,7 @@
 """
 tests/test_malformed_urls.py
 =============================
-Regression tests for PROJECT_REVIEW.md 1.1 (P0): malformed URLs raised an
+Regression tests for the P0 tier: malformed URLs raised an
 unhandled ValueError from urlparse/parsed.port, causing HTTP 500 on
 /api/check and — worse — failing an ENTIRE /api/bulk-check batch if one
 row was malformed.

@@ -2,7 +2,7 @@
 core/augmentation_data.py
 =========================
 PhiUSIIL's "legitimate" class is 100% bare-homepage URLs (verified
-empirically - see AUDIT_NOTES.md). Zero legitimate training examples have
+empirically). Zero legitimate training examples have
 a real path, so the model quietly learned "any real path = phishing,"
 which would misclassify most normal web traffic (articles, docs, product
 pages - anything that isn't a homepage).

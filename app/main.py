@@ -49,11 +49,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 from core.features import extract_features, extract_features_batch
 from core.registry import load_current_model, ModelNotFoundError
-from core.lists import is_allowlisted, is_blocklisted
+from core.lists import is_allowlisted, is_blocklisted, reload_lists
 from core.typosquat import find_typosquat_match
 from core.auth import require_dev_key, get_or_create_dev_key
 
 import os
+import logging
+
+# Structured logging of verdicts/stages - domain + outcome only, NEVER the
+# full URL (path/query can carry search terms, tokens, session data - the
+# same privacy reasoning as the extension's query-string stripping).
+# Enough to debug "which domains are generating false-positive reports"
+# without logging anything a user typed or visited beyond its domain.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("phishing_detector")
+
+
+def _domain_only(url: str) -> str:
+    """Hostname only, for logging - never the full URL. See module note above."""
+    try:
+        from core.features import _safe_urlparse
+        return _safe_urlparse(url).hostname or "(unparseable)"
+    except Exception:
+        return "(unparseable)"
+
+
+def _log_verdict(url: str, verdict: str, stage: str, confidence: float | None = None) -> None:
+    conf_str = f" confidence={confidence:.3f}" if confidence is not None else ""
+    logger.info(f"domain={_domain_only(url)} verdict={verdict} stage={stage}{conf_str}")
 
 # In production, FastAPI's auto-generated /docs, /redoc, /openapi.json
 # disclose the full shape of the dev-only bulk endpoints (header name,
@@ -87,6 +110,21 @@ MAX_BULK_URLS = 5000  # guard against an accidental multi-hour request
 MAX_URL_LENGTH = 2048  # matches CheckRequest's existing cap
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB - well past any real URL-list file
 
+# the safe/unsafe cutoff used to be a magic 0.5
+# written TWICE (single-check + bulk-check paths) - the exact "two paths
+# silently diverge" failure mode this codebase otherwise guards against
+# everywhere else (core/features.py's whole reason to exist). One
+# constant, one place to change it.
+#
+# TODO (deferred - review's own suggestion): 0.5 is almost never the
+# right operating point for a security product with asymmetric
+# false-positive/false-negative costs, and there's no "uncertain" band -
+# a 50.1% score renders identically to 99.9%. Tuning this from the
+# validation PR curve at a target precision, and adding a three-way
+# verdict (safe/suspicious/unsafe), is real follow-up work - not done
+# here, this fix only removes the duplication.
+DECISION_THRESHOLD = 0.5
+
 
 class CheckRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=MAX_URL_LENGTH)
@@ -106,7 +144,7 @@ class BulkCheckRequest(BaseModel):
     # list-level max_length above only capped URL COUNT, not per-URL byte
     # size - a single 500,000-character "URL" was accepted and processed,
     # which is what made the event-loop-blocking DoS reachable through
-    # plain JSON, no file upload required. See AUDIT_NOTES.md 3.16.
+    # plain JSON, no file upload required.
     urls: list[Annotated[str, Field(max_length=MAX_URL_LENGTH)]] = Field(
         ..., min_length=1, max_length=MAX_BULK_URLS
     )
@@ -122,17 +160,21 @@ def _decide_stage1(url: str) -> CheckResponse | None:
     through to the ML model (stage1 alone can't decide it). Shared by
     both /api/check and /api/bulk-check so the two paths can never
     silently diverge - the same lesson as core/features.py."""
+    result: CheckResponse | None = None
     if is_blocklisted(url):
-        return CheckResponse(checked_url=url, verdict="unsafe", stage="blocklist")
-    if is_allowlisted(url):
-        return CheckResponse(checked_url=url, verdict="safe", stage="allowlist")
-    typosquat_match = find_typosquat_match(url)
-    if typosquat_match:
-        return CheckResponse(
-            checked_url=url, verdict="unsafe", stage="typosquat",
-            note=f"Domain closely resembles known site '{typosquat_match}' but does not match it exactly.",
-        )
-    return None
+        result = CheckResponse(checked_url=url, verdict="unsafe", stage="blocklist")
+    elif is_allowlisted(url):
+        result = CheckResponse(checked_url=url, verdict="safe", stage="allowlist")
+    else:
+        typosquat_match = find_typosquat_match(url)
+        if typosquat_match:
+            result = CheckResponse(
+                checked_url=url, verdict="unsafe", stage="typosquat",
+                note=f"Domain closely resembles known site '{typosquat_match}' but does not match it exactly.",
+            )
+    if result is not None:
+        _log_verdict(url, result.verdict, result.stage)
+    return result
 
 
 @app.get("/health")
@@ -142,6 +184,24 @@ def health():
         return {"status": "ok", "model_version": meta["version"]}
     except ModelNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.post("/api/admin/reload", dependencies=[Depends(require_dev_key)])
+def admin_reload():
+    """both core/registry.py and core/lists.py
+    advertise 'call cache_clear() after retraining/refresh' in their own
+    docstrings, but nothing ever called them and no endpoint existed to
+    trigger it - after retraining or editing config/*.json, the running
+    server kept serving the OLD model/lists until a manual restart. This
+    is the missing wiring, gated behind the same dev key as bulk-check."""
+    load_current_model.cache_clear()
+    reload_lists()
+    try:
+        _, meta = load_current_model()
+        model_version = meta["version"]
+    except ModelNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"status": "reloaded", "model_version": model_version}
 
 
 @app.post("/api/check", response_model=CheckResponse)
@@ -160,7 +220,8 @@ def check_url(payload: CheckRequest):
     feats = extract_features(url)
     row = pd.DataFrame([feats])
     proba_phishing = float(pipeline.predict_proba(row)[0, 1])
-    verdict = "unsafe" if proba_phishing >= 0.5 else "safe"
+    verdict = "unsafe" if proba_phishing >= DECISION_THRESHOLD else "safe"
+    _log_verdict(url, verdict, "model", proba_phishing)
 
     return CheckResponse(
         checked_url=url,
@@ -198,9 +259,11 @@ def _bulk_check(urls: list[str]) -> BulkCheckResponse:
         probs = pipeline.predict_proba(feats_df)[:, 1]
         for idx, url, p in zip(fallthrough_indices, fallthrough_urls, probs):
             p = float(p)
+            verdict = "unsafe" if p >= DECISION_THRESHOLD else "safe"
+            _log_verdict(url, verdict, "model", p)
             results[idx] = CheckResponse(
                 checked_url=url,
-                verdict="unsafe" if p >= 0.5 else "safe",
+                verdict=verdict,
                 stage="model",
                 confidence=p,
                 model_version=metadata["version"],
@@ -232,7 +295,7 @@ def _csv_safe(value) -> str:
     apps to treat it as text rather than evaluate it. Closes a confirmed
     finding: an uploaded url column value like '=cmd|\' /C calc\'!A1'
     was written verbatim into the exported CSV and would execute as a
-    formula if opened in Excel/Sheets. See AUDIT_NOTES.md 3.16."""
+    formula if opened in Excel/Sheets."""
     s = "" if value is None else str(value)
     if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + s
@@ -252,7 +315,7 @@ def bulk_check_file(file: UploadFile = File(...)):
     `async def` version ran all of that directly on the single event-loop
     thread - confirmed in security testing: one 19MB upload froze the
     entire server, including the public /api/check endpoint, for 35
-    seconds. See AUDIT_NOTES.md 3.16."""
+    seconds."""
     content_length = file.size
     if content_length is not None and content_length > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -308,9 +371,12 @@ def bulk_check_file(file: UploadFile = File(...)):
     return StreamingResponse(output, media_type="text/csv", headers=headers)
 
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return _INDEX_HTML
+    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
 @app.get("/dev/bulk", response_class=HTMLResponse)
@@ -319,250 +385,6 @@ def dev_bulk_page():
     the key is entered in the browser and sent as a header on the actual
     /api/bulk-check-file request, which IS protected. Serving the page
     without a key is harmless; it does nothing without a valid key."""
-    return _BULK_HTML
+    return (STATIC_DIR / "bulk.html").read_text(encoding="utf-8")
 
 
-_INDEX_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-<title>Phishing Website Checker</title>
-<style>
-  body { background:#0b0f19; color:#e5e7eb; font-family:-apple-system,sans-serif;
-         display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
-  .card { background:#111827; border-radius:12px; padding:28px 32px; width:420px;
-          box-shadow:0 4px 24px rgba(0,0,0,.4); }
-  h1 { font-size:20px; margin:0 0 4px; }
-  p.sub { color:#9ca3af; font-size:13px; margin:0 0 16px; }
-  .row { display:flex; gap:8px; }
-  input { flex:1; background:#0b0f19; border:1px solid #374151; color:#e5e7eb;
-          border-radius:8px; padding:10px 12px; font-size:14px; }
-  button { background:#2563eb; color:white; border:none; border-radius:8px;
-           padding:10px 18px; font-size:14px; cursor:pointer; }
-  button:disabled { opacity:.6; cursor:default; }
-  .result { margin-top:18px; font-size:14px; }
-  .badge { display:inline-block; padding:3px 10px; border-radius:12px; font-weight:600; font-size:12px; }
-  .safe { background:#064e3b; color:#6ee7b7; }
-  .unsafe { background:#4c0519; color:#fca5a5; }
-  .meta { color:#6b7280; font-size:12px; margin-top:10px; border-top:1px solid #1f2937; padding-top:10px; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <h1>Phishing Website Checker</h1>
-    <p class="sub">Enter a URL to see if this website is safe or unsafe.</p>
-    <div class="row">
-      <input id="urlInput" value="https://www.example.com/" />
-      <button id="checkBtn" onclick="checkUrl()">Check</button>
-    </div>
-    <div id="result" class="result"></div>
-  </div>
-
-<script>
-// AbortController ties each response to the request that produced it, so a
-// slow older request can NEVER overwrite the display after a newer one has
-// already returned. This is the direct fix for the "input says X, result
-// says Y" bug: without this, a slow first request finishing after a fast
-// second request would silently clobber the correct, newer result.
-let currentController = null;
-
-async function checkUrl() {
-  const url = document.getElementById('urlInput').value.trim();
-  if (!url) return;
-
-  if (currentController) currentController.abort();
-  currentController = new AbortController();
-  const thisController = currentController;
-
-  const btn = document.getElementById('checkBtn');
-  btn.disabled = true;
-
-  try {
-    const res = await fetch('/api/check', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({url}),
-      signal: thisController.signal,
-    });
-    const data = await res.json();
-
-    // Guard: only render if this is still the most recent request.
-    if (thisController !== currentController) return;
-
-    const badgeClass = data.verdict === 'safe' ? 'safe' : 'unsafe';
-    const confidenceStr = data.confidence != null
-      ? ` (model confidence: ${(data.confidence*100).toFixed(1)}%)` : '';
-    const noteStr = data.note ? `<br/><span style="color:#fca5a5">${data.note}</span>` : '';
-    document.getElementById('result').innerHTML = `
-      <span class="badge ${badgeClass}">${data.verdict.toUpperCase()}</span>
-      This website is ${data.verdict}.${confidenceStr}${noteStr}
-      <div class="meta">
-        Checked URL: ${data.checked_url}<br/>
-        Decision stage: ${data.stage}${data.model_version ? ' &middot; model ' + data.model_version : ''}
-      </div>`;
-  } catch (err) {
-    if (err.name !== 'AbortError') {
-      document.getElementById('result').innerHTML =
-        `<span style="color:#f87171">Error checking URL.</span>`;
-    }
-  } finally {
-    if (thisController === currentController) btn.disabled = false;
-  }
-}
-</script>
-</body>
-</html>
-"""
-
-
-_BULK_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-<title>Bulk URL Checker (Dev)</title>
-<style>
-  body { background:#0b0f19; color:#e5e7eb; font-family:-apple-system,sans-serif;
-         margin:0; padding:32px; }
-  .card { background:#111827; border-radius:12px; padding:28px 32px; max-width:900px;
-          margin:0 auto; box-shadow:0 4px 24px rgba(0,0,0,.4); }
-  h1 { font-size:20px; margin:0 0 4px; }
-  p.sub { color:#9ca3af; font-size:13px; margin:0 0 20px; }
-  label { display:block; font-size:13px; color:#9ca3af; margin:14px 0 6px; }
-  input[type=password], input[type=file], textarea {
-    width:100%; box-sizing:border-box; background:#0b0f19; border:1px solid #374151;
-    color:#e5e7eb; border-radius:8px; padding:10px 12px; font-size:14px; font-family:inherit;
-  }
-  textarea { resize:vertical; }
-  button { background:#2563eb; color:white; border:none; border-radius:8px;
-           padding:10px 18px; font-size:14px; cursor:pointer; margin-top:14px; }
-  button:disabled { opacity:.6; cursor:default; }
-  .error { color:#fca5a5; font-size:13px; margin-top:10px; }
-  table { width:100%; border-collapse:collapse; margin-top:20px; font-size:13px; }
-  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid #1f2937; }
-  th { color:#9ca3af; font-weight:600; }
-  .safe { color:#6ee7b7; }
-  .unsafe { color:#fca5a5; }
-  .summary { margin-top:16px; font-size:13px; color:#9ca3af; }
-  .divider { border-top:1px solid #1f2937; margin:20px 0; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <h1>Bulk URL Checker</h1>
-    <p class="sub">Developer-only. Upload a .txt (one URL per line) or .csv (a "url" column) file, or paste URLs directly.</p>
-
-    <label for="devKey">Dev key</label>
-    <input type="password" id="devKey" placeholder="X-Dev-Key" />
-
-    <div class="divider"></div>
-
-    <label for="fileInput">Upload file</label>
-    <input type="file" id="fileInput" accept=".txt,.csv" />
-    <button id="uploadBtn" onclick="uploadFile()">Check file</button>
-
-    <div class="divider"></div>
-
-    <label for="pasteInput">...or paste URLs (one per line)</label>
-    <textarea id="pasteInput" rows="6" placeholder="https://example.com&#10;https://another-example.com"></textarea>
-    <button id="pasteBtn" onclick="checkPasted()">Check pasted URLs</button>
-
-    <div id="error" class="error"></div>
-    <div id="summary" class="summary"></div>
-    <div id="resultsContainer"></div>
-  </div>
-
-<script>
-function getKey() {
-  const key = document.getElementById('devKey').value.trim();
-  sessionStorage.setItem('devKey', key);
-  return key;
-}
-window.onload = () => {
-  const saved = sessionStorage.getItem('devKey');
-  if (saved) document.getElementById('devKey').value = saved;
-};
-
-function renderResults(data) {
-  document.getElementById('error').textContent = '';
-  const s = data.summary;
-  document.getElementById('summary').innerHTML =
-    `Total: ${s.total} &middot; Safe: ${s.safe} &middot; Unsafe: ${s.unsafe} ` +
-    `&middot; By stage: ${Object.entries(s.by_stage).map(([k,v]) => k+'='+v).join(', ')}`;
-
-  let rows = data.results.map(r => `
-    <tr>
-      <td>${r.checked_url}</td>
-      <td class="${r.verdict}">${r.verdict.toUpperCase()}</td>
-      <td>${r.stage}</td>
-      <td>${r.confidence != null ? (r.confidence*100).toFixed(1)+'%' : ''}</td>
-      <td>${r.note || ''}</td>
-    </tr>`).join('');
-
-  document.getElementById('resultsContainer').innerHTML = `
-    <table>
-      <thead><tr><th>URL</th><th>Verdict</th><th>Stage</th><th>Confidence</th><th>Note</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-}
-
-async function checkPasted() {
-  const key = getKey();
-  const urls = document.getElementById('pasteInput').value
-    .split('\\n').map(u => u.trim()).filter(Boolean);
-  if (!urls.length) return;
-  document.getElementById('pasteBtn').disabled = true;
-  try {
-    const res = await fetch('/api/bulk-check', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-Dev-Key': key},
-      body: JSON.stringify({urls}),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      document.getElementById('error').textContent = err.detail || 'Request failed.';
-      return;
-    }
-    renderResults(await res.json());
-  } catch (e) {
-    document.getElementById('error').textContent = 'Error checking URLs.';
-  } finally {
-    document.getElementById('pasteBtn').disabled = false;
-  }
-}
-
-async function uploadFile() {
-  const key = getKey();
-  const fileInput = document.getElementById('fileInput');
-  if (!fileInput.files.length) return;
-  document.getElementById('uploadBtn').disabled = true;
-  try {
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-    const res = await fetch('/api/bulk-check-file', {
-      method: 'POST',
-      headers: {'X-Dev-Key': key},
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({detail: 'Request failed.'}));
-      document.getElementById('error').textContent = err.detail || 'Request failed.';
-      return;
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'bulk_check_results.csv';
-    a.click();
-    document.getElementById('error').textContent = '';
-    document.getElementById('summary').textContent = 'Downloaded bulk_check_results.csv';
-  } catch (e) {
-    document.getElementById('error').textContent = 'Error checking file.';
-  } finally {
-    document.getElementById('uploadBtn').disabled = false;
-  }
-}
-</script>
-</body>
-</html>
-"""

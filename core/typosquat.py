@@ -15,7 +15,7 @@ Reuses the allowlist as the protected-brand reference set, so there's one
 list to maintain, not two (see core/lists.py's staleness-risk fix - the
 same principle applies here: don't hardcode a second brand list in code).
 
-IMPORTANT - how brand cores are extracted (see AUDIT_NOTES.md 3.16):
+IMPORTANT - how brand cores are extracted:
 The original version took host.split(".")[0] - the first DNS label of the
 WHOLE hostname - as "the core" to compare, with no awareness of where the
 registrable domain actually starts. This caused a real, confirmed bug:
@@ -110,7 +110,7 @@ def _normalize_host(url: str) -> str:
     # NFKC normalization folds fullwidth Unicode forms (e.g. 'ａ'-'ｚ') to
     # their ASCII equivalents essentially for free - closes a real gap
     # (fullwidth Unicode wasn't in HOMOGLYPH_MAP) without hand-maintaining
-    # a bigger confusables table. See AUDIT_NOTES.md 3.16.
+    # a bigger confusables table.
     host = unicodedata.normalize("NFKC", host)
     return host[4:] if host.startswith("www.") else host
 
@@ -171,6 +171,16 @@ def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
     if is_allowlisted(url):
         return None  # a real protected domain is never "its own typosquat"
 
+    # TODO (deferred - a secondary recommendation from this project's own
+    # design notes):
+    # at Tranco-Top-1M allowlist scale, reusing the whole allowlist as the
+    # typosquat reference set means every check does a million-entry loop
+    # with an O(len^2) edit-distance DP each - seconds per URL. Keep a
+    # separate, small protected-brands list (top ~500 by attack value)
+    # instead, once the allowlist actually grows that large. Not done now
+    # since the current allowlist (~80 entries) doesn't need it yet, and
+    # splitting the reference set is a real design decision (which ~500
+    # brands?) better made when it's actually load-bearing.
     protected_domains = _load("allowlist")["domains"]
 
     for protected in protected_domains:
@@ -187,29 +197,38 @@ def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
         if any(label == protected_core for label in prefix_labels):
             return protected
 
-        # --- Check 2: registrable-core typosquat (fuzzy, same rules as
-        # before, now operating on the CORRECTLY size-matched core) ---
+        # too short/generic to ever compare safely by ANY method (e.g. "co")
         if len(protected_core) < 3:
-            continue  # too short/generic to ever compare safely (e.g. "co")
-        if len(protected_core) <= 4:
-            if len(host_core) != len(protected_core):
-                continue
-            if _damerau_levenshtein(host_core, protected_core) == 1:
-                return protected
             continue
-        if abs(len(host_core) - len(protected_core)) > 1:
-            continue
-        distance = _damerau_levenshtein(host_core, protected_core)
-        if distance == 1:
-            return protected  # distance-1 on a long core is unambiguous, no gate needed
-        if distance == 2:
-            transposition_involved = (
-                _levenshtein_no_transposition(host_core, protected_core) > distance
-            )
-            if transposition_involved or _has_corroborating_signal(url, host):
-                return protected
 
-        # --- Check 3: leetspeak/homoglyph normalized exact match ---
+        # --- Check 2: registrable-core typosquat (fuzzy, same rules as
+        # before, now operating on the CORRECTLY size-matched core).
+        # This branch used to `continue` past Check 3 on
+        # every branch, making Check 3 structurally unreachable for any
+        # protected core of length <=4 (sbi, rbi, irs, usa, nih, ajio,
+        # jio) - confirmed live: '5b!' normalizes exactly to 'sbi' under
+        # this file's own LEETSPEAK_MAP but was silently missed. Fixed by
+        # falling through to Check 3 instead of skipping to the next
+        # protected domain. ---
+        if len(protected_core) <= 4:
+            if len(host_core) == len(protected_core):
+                if _damerau_levenshtein(host_core, protected_core) == 1:
+                    return protected
+        else:
+            if abs(len(host_core) - len(protected_core)) <= 1:
+                distance = _damerau_levenshtein(host_core, protected_core)
+                if distance == 1:
+                    return protected  # distance-1 on a long core is unambiguous, no gate needed
+                if distance == 2:
+                    transposition_involved = (
+                        _levenshtein_no_transposition(host_core, protected_core) > distance
+                    )
+                    if transposition_involved or _has_corroborating_signal(url, host):
+                        return protected
+
+        # --- Check 3: leetspeak/homoglyph normalized exact match - now
+        # ALWAYS reached (see comment above), regardless of what Check 2
+        # decided for this protected domain. ---
         if count_confusable_chars(host_core) > 0:
             if normalize_confusables(host_core) == protected_core:
                 return protected

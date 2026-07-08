@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS = {
 
 const CACHE_TTL_MS = 10 * 60 * 1000;      // 10 min: re-check a site periodically
 const TEMP_ALLOW_TTL_MS = 5 * 60 * 1000;  // 5 min: "proceed anyway" grace period
+const MAX_CACHE_ENTRIES = 500;            // see setCacheEntry below
 const IGNORED_SCHEMES = ["chrome:", "chrome-extension:", "about:", "edge:", "brave:", "file:"];
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -45,6 +46,27 @@ async function getCache() {
 async function setCacheEntry(url, entry) {
   const cache = await getCache();
   cache[url] = { ...entry, timestamp: Date.now() };
+
+  // urlCache accumulated one entry per distinct
+  // URL visited, TTL-checked on READ but never evicted on WRITE.
+  // chrome.storage.session has a ~10MB quota; heavy browsing eventually
+  // makes storage.session.set() start throwing, which then breaks
+  // caching entirely (every navigation silently re-fetches). Prune
+  // expired entries every write, and cap at MAX_CACHE_ENTRIES (drop
+  // oldest first) as a hard backstop even if TTL pruning somehow isn't
+  // enough (e.g. clock skew, extremely high-volume browsing in one
+  // 10-minute window).
+  const now = Date.now();
+  for (const [cachedUrl, cachedEntry] of Object.entries(cache)) {
+    if (now - cachedEntry.timestamp >= CACHE_TTL_MS) delete cache[cachedUrl];
+  }
+  const entries = Object.entries(cache);
+  if (entries.length > MAX_CACHE_ENTRIES) {
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp); // oldest first
+    const toDrop = entries.length - MAX_CACHE_ENTRIES;
+    for (let i = 0; i < toDrop; i++) delete cache[entries[i][0]];
+  }
+
   await chrome.storage.session.set({ urlCache: cache });
 }
 function isCacheFresh(entry) {
@@ -65,11 +87,43 @@ function isTempAllowed(allowMap, url) {
   return ts && Date.now() - ts < TEMP_ALLOW_TTL_MS;
 }
 
+function stripForPrivacy(urlStr) {
+  // every top-level navigation - full URL,
+  // INCLUDING query strings (which routinely contain search terms,
+  // session tokens, password-reset links, document IDs) - was POSTed to
+  // the backend. This is a real privacy exposure: it amounts to sending
+  // meaningful fragments of the user's browsing activity to a
+  // third-party server on every single page load.
+  //
+  // Implementing the review's recommended option 1: strip query string
+  // and fragment before sending, keep only origin + path. The model's
+  // path-based features (suspicious keywords, path depth, etc.) still
+  // work; query-string-based signal is lost for the EXTENSION's checks
+  // specifically (the standalone web checker at "/" is unaffected - a
+  // user pasting a full URL there is giving explicit, one-time consent
+  // to check exactly what they typed, a different privacy posture than
+  // silently checking every navigation).
+  //
+  // TODO (deferred, review option 2, ~half a day): ship the allowlist +
+  // a local Bloom filter of popular domains inside the extension and
+  // only call the backend for domains that miss it. Most browsing is
+  // top-1000 sites - this would eliminate ~95% of backend calls entirely,
+  // which is strictly better for privacy than stripping query strings
+  // from the calls that still happen. Not done in this change set.
+  try {
+    const u = new URL(urlStr);
+    return u.origin + u.pathname;
+  } catch {
+    return urlStr; // unparseable - fall through, backend has its own guard
+  }
+}
+
 async function checkUrlWithBackend(url, backendUrl) {
+  const privacySafeUrl = stripForPrivacy(url);
   const res = await fetch(`${backendUrl}/api/check`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url: privacySafeUrl }),
   });
   if (!res.ok) throw new Error(`Backend returned ${res.status}`);
   return res.json();

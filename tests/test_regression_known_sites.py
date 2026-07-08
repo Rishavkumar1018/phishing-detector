@@ -106,7 +106,7 @@ def test_broader_real_world_sweep_mostly_safe():
     """A wider, less hand-picked sweep than the curated lists above -
     guards against the kind of broad regression found 2026-07-07, where a
     small augmentation set fixed the exact reported cases but nothing else.
-    Not 100% yet (see AUDIT_NOTES.md re: paths on unaugmented domains) -
+    Not 100% yet (paths on unaugmented domains remain a known limitation) -
     this asserts the CURRENT honest bar, not aspirational perfection, and
     should be tightened as coverage improves."""
     results = {}

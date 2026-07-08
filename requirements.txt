@@ -1,3 +1,10 @@
+# Runtime dependencies only - what the deployed app actually needs to
+# serve traffic. Shipping test tooling to production is unnecessary bloat
+# and a needless attack-surface/dependency-conflict risk for something
+# that never runs in the deployed app.
+#
+# Dev/test-only tools live in requirements-dev.txt - install both locally
+# with: pip install -r requirements.txt -r requirements-dev.txt
 fastapi==0.139.0
 uvicorn[standard]==0.50.2
 pydantic==2.13.4
@@ -8,5 +15,3 @@ pandas==3.0.2
 numpy==2.4.4
 scipy==1.17.1
 joblib==1.5.3
-pytest==9.1.1
-httpx==0.28.1

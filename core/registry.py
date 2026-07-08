@@ -32,7 +32,8 @@ class ModelNotFoundError(RuntimeError):
 def load_current_model():
     """Loads the model pointed to by current.json and reconstructs a
     Pipeline-like object. Cached so repeated calls don't re-deserialize;
-    call load_current_model.cache_clear() after retraining to hot-swap.
+    call load_current_model.cache_clear() after retraining to hot-swap,
+    or POST /api/admin/reload (dev-key gated) which does this for you.
 
     Loaded from TWO files, not one: the sklearn preprocessing (joblib,
     portable) and the XGBoost model (native UBJSON via load_model(),
@@ -46,20 +47,25 @@ def load_current_model():
         raise ModelNotFoundError(
             f"No current.json at {pointer_path}. Run models/train.py first."
         )
-    pointer = json.loads(pointer_path.read_text())
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
     preprocessor_path = ARTIFACTS_DIR / pointer["preprocessor_file"]
     xgb_path = ARTIFACTS_DIR / pointer["xgb_model_file"]
     meta_path = ARTIFACTS_DIR / pointer["metadata_file"]
-    if not preprocessor_path.exists() or not xgb_path.exists():
+    # this used to only check preprocessor/xgb
+    # existence, not metadata_file - a half-written current.json (e.g. a
+    # crashed/interrupted train.py run) raised a raw FileNotFoundError
+    # when meta_path.read_text(encoding="utf-8") was called below, which propagates as
+    # an unhandled 500 instead of the intended ModelNotFoundError -> 503.
+    if not preprocessor_path.exists() or not xgb_path.exists() or not meta_path.exists():
         raise ModelNotFoundError(
-            f"current.json points to missing file(s): {preprocessor_path} / {xgb_path}"
+            f"current.json points to missing file(s): {preprocessor_path} / {xgb_path} / {meta_path}"
         )
 
     preprocessor = joblib.load(preprocessor_path)
     clf = XGBClassifier()
     clf.load_model(str(xgb_path))
     pipeline = Pipeline([("features", preprocessor), ("clf", clf)])
-    metadata = json.loads(meta_path.read_text())
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     return pipeline, metadata
 
 

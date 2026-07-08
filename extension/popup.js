@@ -1,5 +1,15 @@
 let currentTabUrl = "";
 
+// result.note is backend-controlled today (low
+// risk), but one compromised/misconfigured backend away from XSS inside
+// the extension's own privileged popup context. Same escape pattern as
+// app/main.py's embedded pages.
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s == null ? "" : String(s);
+  return div.innerHTML;
+}
+
 function renderStatus(result) {
   const area = document.getElementById("statusArea");
   if (!result) {
@@ -11,7 +21,7 @@ function renderStatus(result) {
   area.innerHTML = `
     <span class="badge ${cls}">${result.verdict.toUpperCase()}</span>
     <div class="row">Stage: ${result.stage}${conf}</div>
-    ${result.note ? `<div class="row">${result.note}</div>` : ""}
+    ${result.note ? `<div class="row">${escapeHtml(result.note)}</div>` : ""}
   `;
 }
 

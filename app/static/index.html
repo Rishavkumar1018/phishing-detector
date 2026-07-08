@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Phishing Website Checker</title>
+<style>
+  body { background:#0b0f19; color:#e5e7eb; font-family:-apple-system,sans-serif;
+         display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+  .card { background:#111827; border-radius:12px; padding:28px 32px; width:420px;
+          box-shadow:0 4px 24px rgba(0,0,0,.4); }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { color:#9ca3af; font-size:13px; margin:0 0 16px; }
+  .row { display:flex; gap:8px; }
+  input { flex:1; background:#0b0f19; border:1px solid #374151; color:#e5e7eb;
+          border-radius:8px; padding:10px 12px; font-size:14px; }
+  button { background:#2563eb; color:white; border:none; border-radius:8px;
+           padding:10px 18px; font-size:14px; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .result { margin-top:18px; font-size:14px; }
+  .badge { display:inline-block; padding:3px 10px; border-radius:12px; font-weight:600; font-size:12px; }
+  .safe { background:#064e3b; color:#6ee7b7; }
+  .unsafe { background:#4c0519; color:#fca5a5; }
+  .meta { color:#6b7280; font-size:12px; margin-top:10px; border-top:1px solid #1f2937; padding-top:10px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Phishing Website Checker</h1>
+    <p class="sub">Enter a URL to see if this website is safe or unsafe.</p>
+    <div class="row">
+      <input id="urlInput" value="https://www.example.com/" />
+      <button id="checkBtn" onclick="checkUrl()">Check</button>
+    </div>
+    <div id="result" class="result"></div>
+  </div>
+
+<script>
+// Escapes attacker-controlled text before it goes into innerHTML.
+// checked_url/note are user-controlled (checking
+// a suspicious URL IS the use case) and were interpolated raw into a
+// template literal assigned to innerHTML - e.g. a checked URL of
+// "https://example.com/<img src=x onerror=alert(document.cookie)>"
+// would execute script on this page. textContent -> innerHTML round-trip
+// is the standard, dependency-free way to escape.
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s == null ? '' : String(s);
+  return div.innerHTML;
+}
+
+// AbortController ties each response to the request that produced it, so a
+// slow older request can NEVER overwrite the display after a newer one has
+// already returned. This is the direct fix for the "input says X, result
+// says Y" bug: without this, a slow first request finishing after a fast
+// second request would silently clobber the correct, newer result.
+let currentController = null;
+
+async function checkUrl() {
+  const url = document.getElementById('urlInput').value.trim();
+  if (!url) return;
+
+  if (currentController) currentController.abort();
+  currentController = new AbortController();
+  const thisController = currentController;
+
+  const btn = document.getElementById('checkBtn');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/check', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url}),
+      signal: thisController.signal,
+    });
+    const data = await res.json();
+
+    // Guard: only render if this is still the most recent request.
+    if (thisController !== currentController) return;
+
+    const badgeClass = data.verdict === 'safe' ? 'safe' : 'unsafe';
+    const confidenceStr = data.confidence != null
+      ? ` (model confidence: ${(data.confidence*100).toFixed(1)}%)` : '';
+    const noteStr = data.note ? `<br/><span style="color:#fca5a5">${escapeHtml(data.note)}</span>` : '';
+    document.getElementById('result').innerHTML = `
+      <span class="badge ${badgeClass}">${data.verdict.toUpperCase()}</span>
+      This website is ${data.verdict}.${confidenceStr}${noteStr}
+      <div class="meta">
+        Checked URL: ${escapeHtml(data.checked_url)}<br/>
+        Decision stage: ${data.stage}${data.model_version ? ' &middot; model ' + data.model_version : ''}
+      </div>`;
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      document.getElementById('result').innerHTML =
+        `<span style="color:#f87171">Error checking URL.</span>`;
+    }
+  } finally {
+    if (thisController === currentController) btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

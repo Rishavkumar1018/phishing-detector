@@ -1,8 +1,8 @@
 """
 tests/test_security_fixes.py
 ==============================
-Regression tests for findings in SECURITY_ASSESSMENT.md (2026-07-07 red
-team review). See AUDIT_NOTES.md 3.16 for the full writeup.
+Regression tests for findings from a 2026-07-07 red
+team review).16 for the full writeup.
 """
 import sys
 from pathlib import Path

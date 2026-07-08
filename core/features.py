@@ -16,7 +16,7 @@ Every feature below is:
     synchronously in the request path.
   - Deterministic and exactly documented -> no undocumented formulas
     borrowed from a paper that can't actually be reproduced (see
-    AUDIT_NOTES.md for a worked example of why that matters).
+    this file's own commit history for a worked example of why that matters).
 
 Two exported functions:
   extract_features(url)        -> dict, for a single URL (serving path)
@@ -27,6 +27,8 @@ there is no way for the two paths to disagree.
 from __future__ import annotations
 import re
 import math
+import json
+import hashlib
 import ipaddress
 from urllib.parse import urlparse
 from collections import Counter
@@ -55,6 +57,27 @@ COMMON_TLDS = {
     "ca", "au", "us", "info", "biz", "gov.in", "co.uk", "co.in",
 }
 
+
+def _fingerprint_constants(keywords: list[str], tlds: set[str]) -> str:
+    """SUSPICIOUS_PATH_KEYWORDS and COMMON_TLDS are
+    code constants; the model metadata itself says 'expand via config, not
+    by editing code' as a known limitation, but changing either one
+    silently invalidates a trained model - the feature semantics shift
+    under a frozen model, with no way to detect the mismatch at serve
+    time. This produces a short, order-independent fingerprint of both,
+    recorded in model metadata at train time (see models/train.py) and
+    checked against the live values whenever a model is loaded."""
+    normalized = json.dumps({"keywords": sorted(keywords), "tlds": sorted(tlds)}, sort_keys=True)
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
+def feature_constants_fingerprint() -> str:
+    """The fingerprint of the CURRENTLY LOADED code's constants - compare
+    this against a model's saved metadata['feature_constants_fingerprint']
+    to detect feature-list drift (someone edited the keyword/TLD lists
+    without retraining)."""
+    return _fingerprint_constants(SUSPICIOUS_PATH_KEYWORDS, COMMON_TLDS)
+
 FEATURE_NAMES = [
     "url_length", "domain_length", "path_length", "query_length",
     "num_dots", "num_hyphens", "num_underscores", "num_slashes",
@@ -66,7 +89,7 @@ FEATURE_NAMES = [
     "num_path_segments", "suspicious_keyword_count", "has_port",
     "is_common_tld",
     # Wordplay/character-substitution features (core/wordplay.py) - see
-    # AUDIT_NOTES.md 3.15. General technique detection, not tied to any
+    # General technique detection (core/wordplay.py), not tied to any
     # specific brand list.
     "has_mixed_script", "is_punycode", "num_confusable_chars",
     "confusable_char_ratio", "domain_has_obfuscated_suspicious_term",
@@ -96,7 +119,7 @@ def _is_ip(host: str) -> bool:
 
 def _safe_urlparse(url: str):
     """urlparse() raises ValueError on some malformed inputs (notably
-    invalid IPv6 literals like 'https://[::1/'). See PROJECT_REVIEW.md 1.1.
+    invalid IPv6 literals like 'https://[::1/').
     A URL that can't be parsed is itself a signal, not a reason to 500.
     On failure we retry against a bracket-stripped copy so the rest of
     feature extraction still gets real values off the recoverable parts;
@@ -115,7 +138,7 @@ def _safe_urlparse(url: str):
 
 def _safe_port(parsed) -> int | None:
     """parsed.port raises ValueError for out-of-range (>65535) or
-    non-integer ports. See PROJECT_REVIEW.md 1.1. An unparseable port
+    non-integer ports. An unparseable port
     means 'no valid port' -> has_port=0, which is also a mild signal.
     Well-formed URLs are unaffected."""
     try:
@@ -144,16 +167,29 @@ def extract_features(url: str) -> dict:
     # Structural fix, not a data patch (same pattern as the trailing-slash
     # fix below): PhiUSIIL's legitimate class has a "www." artifact -
     # 100% of its benign examples have a www. prefix; ~59% of its phishing
-    # examples don't (see AUDIT_NOTES.md 3.9). "www." is a cosmetic
+    # examples don't . "www." is a cosmetic
     # subdomain convention, not a real phishing signal - openai.com,
     # stripe.com, and discord.com are all legitimate with no www. So we
     # compute features on the www-stripped host, removing the model's
     # ability to use "has www" as a proxy for "is legitimate."
     norm_host = host[4:] if host.startswith("www.") else host
-    url_www_normalized = url.replace(host, norm_host, 1) if norm_host != host else url
+    # urlparse().hostname is already lowercased,
+    # but the raw url string isn't - a plain str.replace(host, norm_host)
+    # silently finds nothing for e.g. "HTTP://WWW.GOOGLE.COM/" (searching
+    # for lowercase "www.google.com" inside an uppercase string), so the
+    # www-stripping doesn't happen and count-based features differ
+    # between two byte-different but semantically identical URLs. Fixed
+    # with a case-insensitive match on the actual (possibly-uppercase)
+    # host substring, so the real characters get replaced regardless of
+    # case - not by lowercasing the whole url, which would also be wrong
+    # (path/query case can legitimately carry meaning).
+    if norm_host != host:
+        url_www_normalized = re.sub(re.escape(host), norm_host, url, count=1, flags=re.IGNORECASE)
+    else:
+        url_www_normalized = url
 
     # Structural fix, not a data patch: PhiUSIIL's legitimate class has a
-    # trailing-slash/slash-count artifact (see AUDIT_NOTES.md 3.8) that no
+    # trailing-slash/slash-count artifact  that no
     # amount of augmentation fully closes, because a tree ensemble
     # memorizes the specific augmented examples rather than learning "a
     # trailing slash on an otherwise-bare root is semantically identical to
