@@ -1,0 +1,42 @@
+P0 CHANGE SET — apply instructions
+===================================
+
+These 8 files are the ONLY changes in this P0 tier. Copy each one to the
+SAME relative path in your project, overwriting the existing file.
+
+  .gitignore                        -> (project root) .gitignore
+  core/features.py                  -> core/features.py
+  core/lists.py                     -> core/lists.py
+  core/typosquat.py                 -> core/typosquat.py
+  models/train.py                   -> models/train.py
+  extension/warning.html            -> extension/warning.html
+  extension/warning.js              -> extension/warning.js
+  tests/test_malformed_urls.py      -> tests/test_malformed_urls.py   (NEW file)
+
+WHAT CHANGED (P0 tier from PROJECT_REVIEW.md):
+  1.1  Malformed URLs no longer crash /api/check or fail a bulk batch
+       (core/features.py + core/lists.py + core/typosquat.py)
+  1.2  Extension warning-page buttons now work under MV3 CSP
+       (extension/warning.html + extension/warning.js)
+  1.3  models/train.py dataset path now points at dataset/ in the repo,
+       overridable via PHISHING_DETECTOR_DATASET env var
+  .gitignore  now ignores dataset/ so the large PhiUSIIL CSV isn't pushed
+
+AFTER COPYING — verify on your machine (Windows, project venv):
+
+  venv\Scripts\python.exe -m pytest tests/ -v
+
+  Expect: 59 passed (50 original + 9 new malformed-URL tests).
+
+RELOAD THE EXTENSION (for the warning-button fix to take effect):
+  chrome://extensions  ->  click the refresh/reload icon on the
+  "Phishing URL Checker" card.
+
+THEN COMMIT + PUSH (this also commits extension/ per review item 5.1):
+
+  git add .
+  git commit -m "P0 fixes: malformed-URL crashes, MV3 warning buttons, train.py dataset path"
+  git push
+
+NOTE: no model retraining is required for this change set — no feature
+semantics changed for any URL that already parsed correctly.

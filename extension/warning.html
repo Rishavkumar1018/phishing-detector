@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Warning: Suspected Phishing Site</title>
+<style>
+  body { background:#0b0f19; color:#e5e7eb; font-family:-apple-system,sans-serif;
+         display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+  .card { background:#111827; border-radius:12px; padding:36px 40px; max-width:560px;
+          box-shadow:0 4px 24px rgba(0,0,0,.5); border:1px solid #4c0519; }
+  .icon { font-size:40px; margin-bottom:8px; }
+  h1 { font-size:22px; margin:0 0 12px; color:#fca5a5; }
+  p { line-height:1.5; color:#d1d5db; }
+  .url-box { background:#0b0f19; border:1px solid #374151; border-radius:8px;
+             padding:10px 14px; font-family:monospace; font-size:13px; word-break:break-all;
+             margin:16px 0; color:#fca5a5; }
+  .details { font-size:13px; color:#9ca3af; margin:12px 0 24px; }
+  .buttons { display:flex; gap:12px; }
+  button { border:none; border-radius:8px; padding:11px 20px; font-size:14px; cursor:pointer; font-weight:600; }
+  .primary { background:#2563eb; color:white; }
+  .secondary { background:#1f2937; color:#e5e7eb; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">&#9888;&#65039;</div>
+    <h1>This site may be a phishing attempt</h1>
+    <p>Our checker flagged this website as unsafe before it loaded. It may be impersonating a legitimate site to steal your information.</p>
+    <div class="url-box" id="blockedUrl"></div>
+    <div class="details" id="detailsBox"></div>
+    <div class="buttons">
+      <button class="secondary" id="backBtn">Go back (recommended)</button>
+      <button class="primary" id="proceedBtn">Proceed anyway</button>
+    </div>
+  </div>
+
+<script src="warning.js"></script>
+</body>
+</html>

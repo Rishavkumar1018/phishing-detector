@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width:320px; background:#0b0f19; color:#e5e7eb; font-family:-apple-system,sans-serif;
+         margin:0; padding:18px; }
+  h1 { font-size:15px; margin:0 0 12px; }
+  .url { font-size:12px; color:#9ca3af; word-break:break-all; margin-bottom:12px; font-family:monospace; }
+  .badge { display:inline-block; padding:4px 12px; border-radius:12px; font-weight:600; font-size:12px; }
+  .safe { background:#064e3b; color:#6ee7b7; }
+  .unsafe { background:#4c0519; color:#fca5a5; }
+  .unknown { background:#374151; color:#d1d5db; }
+  .row { margin:12px 0; font-size:13px; color:#d1d5db; }
+  button { width:100%; background:#2563eb; color:white; border:none; border-radius:8px;
+           padding:9px; font-size:13px; cursor:pointer; margin-top:6px; }
+  button:disabled { opacity:.6; cursor:default; }
+  .toggle-row { display:flex; align-items:center; justify-content:space-between;
+                margin-top:14px; padding-top:14px; border-top:1px solid #1f2937; font-size:13px; }
+  a { color:#60a5fa; font-size:12px; }
+</style>
+</head>
+<body>
+  <h1>Phishing URL Checker</h1>
+  <div class="url" id="currentUrl">Loading...</div>
+  <div id="statusArea"><span class="badge unknown">Not yet checked</span></div>
+  <button id="checkBtn">Check this page</button>
+
+  <div class="toggle-row">
+    <span>Auto-check on navigation</span>
+    <input type="checkbox" id="autoCheckToggle" />
+  </div>
+  <div class="row"><a href="options.html" target="_blank">Settings</a></div>
+
+<script src="popup.js"></script>
+</body>
+</html>

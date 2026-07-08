@@ -94,6 +94,36 @@ def _is_ip(host: str) -> bool:
         return False
 
 
+def _safe_urlparse(url: str):
+    """urlparse() raises ValueError on some malformed inputs (notably
+    invalid IPv6 literals like 'https://[::1/'). See PROJECT_REVIEW.md 1.1.
+    A URL that can't be parsed is itself a signal, not a reason to 500.
+    On failure we retry against a bracket-stripped copy so the rest of
+    feature extraction still gets real values off the recoverable parts;
+    if even that fails, we parse an empty string (all-empty components).
+    Well-formed URLs are unaffected - identical output to a bare
+    urlparse(), so the trained model is not invalidated."""
+    try:
+        return urlparse(url)
+    except ValueError:
+        pass
+    try:
+        return urlparse(url.replace("[", "").replace("]", ""))
+    except ValueError:
+        return urlparse("")
+
+
+def _safe_port(parsed) -> int | None:
+    """parsed.port raises ValueError for out-of-range (>65535) or
+    non-integer ports. See PROJECT_REVIEW.md 1.1. An unparseable port
+    means 'no valid port' -> has_port=0, which is also a mild signal.
+    Well-formed URLs are unaffected."""
+    try:
+        return parsed.port
+    except ValueError:
+        return None
+
+
 def extract_features(url: str) -> dict:
     """Turn one URL string into the full feature dict. This is the ONLY
     place feature logic should ever be written. Both train.py and the
@@ -102,7 +132,7 @@ def extract_features(url: str) -> dict:
     if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
         url = "http://" + url  # tolerate bare domains typed by users
 
-    parsed = urlparse(url)
+    parsed = _safe_urlparse(url)
     host = parsed.hostname or ""
     path = parsed.path or ""
     query = parsed.query or ""
@@ -195,7 +225,7 @@ def extract_features(url: str) -> dict:
         "has_at_symbol": int("@" in count_basis_url),
         "num_path_segments": len([p for p in path.split("/") if p]),
         "suspicious_keyword_count": suspicious_count,
-        "has_port": int(parsed.port is not None),
+        "has_port": int(_safe_port(parsed) is not None),
         "is_common_tld": int(tld in COMMON_TLDS),
         "has_mixed_script": int(has_mixed_script(norm_host)),
         "is_punycode": int(is_punycode(norm_host)),

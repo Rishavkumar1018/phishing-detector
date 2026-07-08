@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from functools import lru_cache
-from urllib.parse import urlparse
+from core.features import _safe_urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "config"
@@ -29,7 +29,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 def _normalize_host(url_or_host: str) -> str:
     if "://" not in url_or_host:
         url_or_host = "http://" + url_or_host
-    host = urlparse(url_or_host).hostname or ""
+    host = _safe_urlparse(url_or_host).hostname or ""
     return host[4:] if host.startswith("www.") else host
 
 

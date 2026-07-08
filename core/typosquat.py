@@ -46,10 +46,9 @@ since no legitimate business coincidentally names a subdomain "irs" or
 """
 from __future__ import annotations
 import unicodedata
-from urllib.parse import urlparse
 from core.lists import _load, is_allowlisted  # reuse the same cached JSON loader
 from core.wordplay import normalize_confusables, count_confusable_chars, GENERIC_SUSPICIOUS_TERMS
-from core.features import COMMON_TLDS
+from core.features import COMMON_TLDS, _safe_urlparse
 
 
 def _damerau_levenshtein(a: str, b: str) -> int:
@@ -107,7 +106,7 @@ def _levenshtein_no_transposition(a: str, b: str) -> int:
 def _normalize_host(url: str) -> str:
     if "://" not in url:
         url = "http://" + url
-    host = urlparse(url).hostname or ""
+    host = _safe_urlparse(url).hostname or ""
     # NFKC normalization folds fullwidth Unicode forms (e.g. 'ａ'-'ｚ') to
     # their ASCII equivalents essentially for free - closes a real gap
     # (fullwidth Unicode wasn't in HOMOGLYPH_MAP) without hand-maintaining
@@ -148,7 +147,7 @@ def _has_corroborating_signal(url: str, host: str) -> bool:
     a free/unusual TLD - a bare, path-less near-miss with an ordinary TLD
     and no suspicious wording is far more likely a coincidental real
     company than an active attack."""
-    parsed = urlparse(url if "://" in url else "http://" + url)
+    parsed = _safe_urlparse(url if "://" in url else "http://" + url)
     path_query = f"{parsed.path or ''} {parsed.query or ''}".lower()
     normalized_path_query = normalize_confusables(path_query)
     has_keyword = any(

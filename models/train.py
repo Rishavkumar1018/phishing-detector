@@ -11,7 +11,7 @@ file. This is deliberate: it is structurally impossible to load a model
 without also loading the exact vectorizer it was trained with, because
 they are one serialized object. No more "which .pkl is the real one."
 """
-import sys, json, hashlib, subprocess
+import sys, os, json, hashlib, subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -33,7 +33,16 @@ from core.augmentation_data import REAL_BENIGN_URLS_WITH_PATHS, REAL_BENIGN_ROOT
 from core.wordplay_training_data import generate_phishing_examples, generate_legitimate_counter_examples
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_PATH = Path("/mnt/user-data/uploads/PhiUSIIL_Phishing_URL_Dataset.csv")
+# Dataset lives in the repo at dataset/PhiUSIIL_Phishing_URL_Dataset.csv,
+# resolved from repo root (never a hardcoded absolute path - see
+# PROJECT_REVIEW.md 1.3). Override with the PHISHING_DETECTOR_DATASET env
+# var if your copy is elsewhere.
+DATA_PATH = Path(
+    os.environ.get(
+        "PHISHING_DETECTOR_DATASET",
+        ROOT / "dataset" / "PhiUSIIL_Phishing_URL_Dataset.csv",
+    )
+)
 MODEL_DIR = ROOT / "models" / "artifacts"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 RANDOM_STATE = 42
