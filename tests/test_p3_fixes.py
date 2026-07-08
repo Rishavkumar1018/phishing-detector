@@ -28,10 +28,7 @@ def test_list_matching_correctness_matches_old_linear_semantics():
     to the old (correct but slow) linear scan for every case that
     mattered - exact match, subdomain match, and the dot-boundary
     exclusion (evil-wikipedia.org must NOT match wikipedia.org)."""
-    from core.lists import is_allowlisted
-
-    def old_linear_match(host: str, domain_set: set) -> bool:
-        return any(host == e or host.endswith("." + e) for e in domain_set)
+    from core.lists import is_allowlisted, _host_matches_entry
 
     from core.lists import _load, _normalize_host
     domain_set = _load("allowlist")["_domain_set"]
@@ -43,7 +40,7 @@ def test_list_matching_correctness_matches_old_linear_semantics():
         "a.b.c.google.com", "sbi.co.in", "evil.sbi.co.in", "sbi.co.in.evil.com",
     ]
     for host in test_hosts:
-        old_result = old_linear_match(host, domain_set)
+        old_result = any(_host_matches_entry(host, e) for e in domain_set)
         new_result = is_allowlisted("https://" + host + "/")
         assert old_result == new_result, f"Mismatch for {host}: old={old_result} new={new_result}"
 

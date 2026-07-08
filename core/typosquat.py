@@ -220,7 +220,7 @@ def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
                 distance = _damerau_levenshtein(host_core, protected_core)
                 if distance == 1:
                     return protected  # distance-1 on a long core is unambiguous, no gate needed
-                if distance == 2:
+                if distance <= max_distance:
                     transposition_involved = (
                         _levenshtein_no_transposition(host_core, protected_core) > distance
                     )
@@ -273,7 +273,7 @@ def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
                                  and _damerau_levenshtein(token, protected_core) == 1)
                 else:
                     near_miss = (abs(len(token) - len(protected_core)) <= 1
-                                 and _damerau_levenshtein(token, protected_core) <= 2)
+                                 and _damerau_levenshtein(token, protected_core) <= max_distance)
                 token_matches = (
                     token == protected_core
                     or near_miss

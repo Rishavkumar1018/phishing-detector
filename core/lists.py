@@ -85,10 +85,3 @@ def is_allowlisted(url: str) -> bool:
 def is_blocklisted(url: str) -> bool:
     host = _normalize_host(url)
     return _matches_any(host, _load("blocklist")["_domain_set"])
-
-
-def list_metadata() -> dict:
-    return {
-        "allowlist": {k: v for k, v in _load("allowlist").items() if not k.startswith("_")},
-        "blocklist": {k: v for k, v in _load("blocklist").items() if not k.startswith("_")},
-    }

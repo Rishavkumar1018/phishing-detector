@@ -35,26 +35,26 @@ and /api/bulk-check-file endpoints), gated by a secret key auto-generated
 in config/dev_key.txt (see core/auth.py) - not open to the public checker.
 """
 from __future__ import annotations
+import os
+import sys
+import io
+import csv
+import logging
+from typing import Annotated
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
-import sys
-import io
-import csv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
-from core.features import extract_features, extract_features_batch
+from core.features import extract_features, extract_features_batch, _safe_urlparse
 from core.registry import load_current_model, ModelNotFoundError
 from core.lists import is_allowlisted, is_blocklisted, reload_lists
 from core.typosquat import find_typosquat_match
 from core.auth import require_dev_key, get_or_create_dev_key
-
-import os
-import logging
 
 # Structured logging of verdicts/stages - domain + outcome only, NEVER the
 # full URL (path/query can carry search terms, tokens, session data - the
@@ -68,7 +68,6 @@ logger = logging.getLogger("phishing_detector")
 def _domain_only(url: str) -> str:
     """Hostname only, for logging - never the full URL. See module note above."""
     try:
-        from core.features import _safe_urlparse
         return _safe_urlparse(url).hostname or "(unparseable)"
     except Exception:
         return "(unparseable)"
@@ -103,8 +102,6 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
-
-from typing import Annotated
 
 MAX_BULK_URLS = 5000  # guard against an accidental multi-hour request
 MAX_URL_LENGTH = 2048  # matches CheckRequest's existing cap

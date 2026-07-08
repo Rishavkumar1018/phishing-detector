@@ -35,7 +35,7 @@ from collections import Counter
 import pandas as pd
 from core.wordplay import (
     normalize_confusables, has_mixed_script, is_punycode,
-    count_confusable_chars, GENERIC_SUSPICIOUS_TERMS,
+    count_confusable_chars, contains_obfuscated_suspicious_term,
 )
 
 # Small, curated, path/query-only keyword list. Deliberately NOT applied to
@@ -52,9 +52,17 @@ SUSPICIOUS_PATH_KEYWORDS = [
 # zero "was this computed on train or test" ambiguity. Deliberately narrow;
 # false negatives here (an uncommon-but-legitimate TLD) are fine because
 # this is one signal among many, not a gate.
+#
+# Single-label only: the TLD extraction below always takes just the LAST
+# domain label (e.g. "in" from "example.gov.in", never the compound
+# "gov.in"). An earlier version of this set included "gov.in"/"co.uk"/
+# "co.in" as if compound TLDs could match - they never could, since
+# nothing here produces a compound string to check against them. Removed
+# as dead/misleading data; behavior is unchanged, since the single-label
+# equivalents ("in", "uk") were already present and cover the same domains.
 COMMON_TLDS = {
     "com", "org", "net", "edu", "gov", "io", "co", "uk", "de", "in",
-    "ca", "au", "us", "info", "biz", "gov.in", "co.uk", "co.in",
+    "ca", "au", "us", "info", "biz",
 }
 
 
@@ -96,9 +104,10 @@ FEATURE_NAMES = [
 ]
 
 # Text used for the TF-IDF side of the model. Path + query ONLY - see
-# module docstring. Never include host/domain here.
-def _path_query_text(parsed) -> str:
-    return f"{parsed.path} {parsed.query}".lower()
+# module docstring. Never include host/domain here. (Computed inline at
+# the call site, not via a wrapper function - kept it simple after
+# finding the original _path_query_text() helper was defined but never
+# actually called anywhere.)
 
 
 def _shannon_entropy(s: str) -> float:
@@ -268,8 +277,7 @@ def extract_features(url: str) -> dict:
         "num_confusable_chars": confusables_in_domain,
         "confusable_char_ratio": confusables_in_domain / len(norm_host) if norm_host else 0.0,
         "domain_has_obfuscated_suspicious_term": int(
-            confusables_in_domain > 0
-            and any(term in normalize_confusables(norm_host) for term in GENERIC_SUSPICIOUS_TERMS)
+            contains_obfuscated_suspicious_term(norm_host)
         ),
         # carried alongside the numeric vector for the TF-IDF stage;
         # dropped before the numeric model sees it (see train.py)

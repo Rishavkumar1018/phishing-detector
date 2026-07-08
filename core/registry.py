@@ -67,8 +67,3 @@ def load_current_model():
     pipeline = Pipeline([("features", preprocessor), ("clf", clf)])
     metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     return pipeline, metadata
-
-
-def get_model_version() -> str:
-    _, metadata = load_current_model()
-    return metadata["version"]

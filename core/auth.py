@@ -103,8 +103,11 @@ def get_or_create_dev_key() -> str:
     KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
     KEY_PATH.write_text(key, encoding="utf-8")
     print(f"\n[phishing_detector] Generated new dev key at {KEY_PATH}")
-    print(f"[phishing_detector] Dev key: {key}")
-    print("[phishing_detector] Use this in the X-Dev-Key header for /api/bulk-check\n")
+    print(f"[phishing_detector] Read the key from that file, or run:")
+    print(f"[phishing_detector]   python -c \"from core.auth import get_or_create_dev_key; print(get_or_create_dev_key())\"")
+    print("[phishing_detector] Use it in the X-Dev-Key header for /api/bulk-check")
+    print("[phishing_detector] (Not printed here directly - on hosts like Render, stdout")
+    print("[phishing_detector]  goes into persistent platform logs.)\n")
     return key
 
 

@@ -205,7 +205,10 @@ def main():
         # added this field for the full writeup.
         "realistic_heldout_metrics": _evaluate_realistic_heldout(pipeline),
         "known_limitations": [
-            "Trained only on PhiUSIIL; no live WHOIS/DNS/TLS signal (see models/dataset_small_model for that, kept separate).",
+            "Trained only on PhiUSIIL; no live WHOIS/DNS/TLS signal. An earlier "
+            "exploratory model using network/WHOIS/DNS metadata (dataset_small.csv) "
+            "was tried but never integrated into serving - the dataset was removed "
+            "as dead weight during a later cleanup pass, since nothing referenced it.",
             "COMMON_TLDS and SUSPICIOUS_PATH_KEYWORDS are small curated lists - expand via config, not by editing code.",
             "No content/rendering features by design (WAF-safety tradeoff)",
             f"Training augmented with {len(REAL_BENIGN_URLS_WITH_PATHS) + len(REAL_BENIGN_ROOT_URLS_WITH_TRAILING_SLASH)} "
