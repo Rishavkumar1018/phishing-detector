@@ -45,6 +45,7 @@ since no legitimate business coincidentally names a subdomain "irs" or
 "paypal".
 """
 from __future__ import annotations
+import re
 import unicodedata
 from core.lists import _load, is_allowlisted  # reuse the same cached JSON loader
 from core.wordplay import normalize_confusables, count_confusable_chars, GENERIC_SUSPICIOUS_TERMS
@@ -232,5 +233,54 @@ def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
         if count_confusable_chars(host_core) > 0:
             if normalize_confusables(host_core) == protected_core:
                 return protected
+
+        # --- Check 4: combosquatting - brand name embedded as ONE
+        # sub-token within a longer hyphenated compound, e.g.
+        # "paypal-secure-verify.com" or "g00gle-signin.com" or
+        # "arnazon-orders.com". Found via real-user testing: every check
+        # above treats host_core as one indivisible string, so a compound
+        # label is always far longer than a bare protected core and gets
+        # excluded by the length-difference guard before any real
+        # comparison happens - "paypal-secure-verify" (20 chars) vs
+        # "paypal" (6 chars) never even reaches a distance calculation.
+        #
+        # A sub-token match is WEAKER evidence than a whole-domain match
+        # (a bare exact match to the whole registrable domain core is
+        # rare/deliberate; a common word showing up as ONE part of a
+        # compound is not - "apple", "usa", and "jio" are all protected
+        # cores that are also ordinary words, and "team-usa-sports.org"
+        # or "apple-pie-recipes.com" must not be flagged just for
+        # containing them). So corroboration (a suspicious term as
+        # another sub-token, or an unusual TLD) is REQUIRED here even for
+        # an exact sub-token match - unlike Check 2's distance-1 case,
+        # which is unambiguous enough to skip the gate.
+        if "-" in host_core or "_" in host_core:
+            sub_tokens = re.split(r"[-_]", host_core)
+            # A suspicious word as ANOTHER sub-token in the SAME compound
+            # label is the most direct corroboration there is - found via
+            # testing that _has_corroborating_signal alone (path/query +
+            # TLD) misses this class entirely, since "paypal-secure-verify.com"
+            # has no path and an ordinary .com TLD; the suspicious words
+            # are sitting right there in the domain, not the path.
+            other_tokens_suspicious = any(
+                t.lower() in GENERIC_SUSPICIOUS_TERMS for t in sub_tokens
+            )
+            for token in sub_tokens:
+                if len(protected_core) <= 4:
+                    # Short cores (usa, irs, jio, sbi...) are also common
+                    # words/abbreviations - stay strict, same as Check 2.
+                    near_miss = (len(token) == len(protected_core)
+                                 and _damerau_levenshtein(token, protected_core) == 1)
+                else:
+                    near_miss = (abs(len(token) - len(protected_core)) <= 1
+                                 and _damerau_levenshtein(token, protected_core) <= 2)
+                token_matches = (
+                    token == protected_core
+                    or near_miss
+                    or (count_confusable_chars(token) > 0
+                        and normalize_confusables(token) == protected_core)
+                )
+                if token_matches and (other_tokens_suspicious or _has_corroborating_signal(url, host)):
+                    return protected
 
     return None

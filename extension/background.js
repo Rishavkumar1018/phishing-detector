@@ -194,6 +194,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async response
   }
   if (message.type === "MANUAL_CHECK") {
+    // Found via real user testing: this handler had no scheme filtering,
+    // unlike onBeforeNavigate. A manual check triggered while a tab was
+    // on a browser-internal page (chrome://newtab/, chrome://settings,
+    // etc.) sent that URL to the backend, which - never seeing anything
+    // like it in training - confidently called it unsafe, and cached it.
+    if (IGNORED_SCHEMES.some((s) => message.url.startsWith(s))) {
+      sendResponse({ ok: false, error: "This type of page cannot be checked." });
+      return true;
+    }
     getSettings().then(async (settings) => {
       try {
         const result = await checkUrlWithBackend(message.url, settings.backendUrl);

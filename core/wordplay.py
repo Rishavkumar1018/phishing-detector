@@ -46,6 +46,11 @@ CONFUSABLES_MAP = {**LEETSPEAK_MAP, **HOMOGLYPH_MAP}
 GENERIC_SUSPICIOUS_TERMS = [
     "secure", "verify", "login", "signin", "account", "bank", "banking",
     "password", "confirm", "update", "wallet", "credential", "authenticate",
+    # Added after real-user testing found "arnazon-orders.com" wasn't
+    # caught: the original list skewed toward login/banking lures and had
+    # no coverage for common e-commerce/delivery phishing patterns.
+    "order", "orders", "delivery", "shipment", "tracking", "invoice",
+    "billing", "refund", "suspended", "expired",
 ]
 
 # Unicode code point ranges for scripts commonly abused in homograph

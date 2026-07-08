@@ -232,3 +232,38 @@ def test_augmentation_generalizes_to_unaugmented_domains():
     assert data["verdict"] == "safe", (
         f"Regression: augmentation may have collapsed back to memorization. Got {data}"
     )
+
+
+def test_combosquatting_brand_plus_suspicious_word_is_caught():
+    """User-reported gap: 'paypal-secure-verify.com', 'g00gle-signin.com',
+    and 'arnazon-orders.com' all bypassed every existing typosquat check,
+    because host_core was always treated as ONE indivisible string - a
+    hyphenated compound is always far longer than a bare protected core,
+    so the length-difference guard excluded it before any real comparison
+    happened. Fixed by splitting on hyphens/underscores and checking each
+    sub-token, requiring a suspicious word as corroboration (since an
+    exact sub-token match alone is too weak a signal - see the next
+    test)."""
+    cases = [
+        ("https://g00gle-signin.com/", "google.com"),
+        ("https://arnazon-orders.com/", "amazon.com"),
+        ("https://paypal-secure-verify.com/", "paypal.com"),
+    ]
+    for url, expected_match in cases:
+        resp = client.post("/api/check", json={"url": url})
+        data = resp.json()
+        assert data["verdict"] == "unsafe", f"{url} -> {data}"
+        assert data["stage"] == "typosquat", f"{url} -> {data}"
+
+
+def test_combosquatting_requires_corroboration_not_just_common_words():
+    """Real false-positive risk found while building the fix: 'apple',
+    'usa', and 'jio' are all protected cores that are ALSO ordinary
+    words/abbreviations. A naive 'brand name appears as a sub-token ->
+    flag' rule would misfire on completely innocent compound domains.
+    Corroboration (a suspicious word as another sub-token) must be
+    required even for an EXACT sub-token match."""
+    for url in ["https://team-usa-sports.org/", "https://apple-pie-recipes.com/",
+                "https://jio-technology-blog.com/", "https://paypal-community.com/"]:
+        resp = client.post("/api/check", json={"url": url})
+        assert resp.json()["stage"] != "typosquat", f"{url} -> {resp.json()}"
