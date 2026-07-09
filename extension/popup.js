@@ -23,21 +23,23 @@ function escapeHtml(s) {
 function renderStatus(result) {
   const area = document.getElementById("statusArea");
   if (!result) {
+    document.body.className = "state-neutral";
     area.innerHTML = `<span class="badge unknown">Not yet checked</span>`;
     return;
   }
-  const cls = result.verdict === "safe" ? "safe" : "unsafe";
-  const conf = result.confidence != null ? ` (${(result.confidence * 100).toFixed(1)}%)` : "";
+  const isSafe = result.verdict === "safe";
+  const cls = isSafe ? "safe" : "unsafe";
+  document.body.className = isSafe ? "state-safe" : "state-unsafe";
   area.innerHTML = `
     <span class="badge ${cls}">${result.verdict.toUpperCase()}</span>
-    <div class="row">Stage: ${result.stage}${conf}</div>
-    ${result.note ? `<div class="row">${escapeHtml(result.note)}</div>` : ""}
+    ${result.note ? `<div class="note">${escapeHtml(result.note)}</div>` : ""}
   `;
 }
 
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabUrl = tab.url || "";
+  document.getElementById("siteName").textContent = tab.title || "";
   document.getElementById("currentUrl").textContent = currentTabUrl;
 
   // Found via real user testing: checking the popup right after typing a
@@ -46,8 +48,11 @@ async function init() {
   // even though the address bar already shows the new URL. Show that
   // plainly instead of silently querying a cache keyed by the wrong URL.
   if (IGNORED_SCHEMES.some((s) => currentTabUrl.startsWith(s))) {
-    document.getElementById("statusArea").innerHTML =
-      `<span class="badge unknown">This type of page cannot be checked</span>`;
+    document.body.className = "state-neutral";
+    document.getElementById("statusArea").innerHTML = `
+      <span class="badge unknown">Uncheckable page</span>
+      <div class="helper-text">Internal browser pages and new tabs cannot be scanned by the extension.</div>
+    `;
     document.getElementById("checkBtn").disabled = true;
     const { autoCheckEnabled } = await chrome.storage.sync.get("autoCheckEnabled");
     document.getElementById("autoCheckToggle").checked = autoCheckEnabled !== false;

@@ -145,6 +145,47 @@ def _safe_urlparse(url: str):
         return urlparse("")
 
 
+def is_valid_url(url: str) -> bool:
+    """True if `url` looks like an actual checkable web address - a
+    hostname with a dot and a plausible TLD (or a literal IP address),
+    not random text with no domain structure at all (e.g.
+    "erfgvrthtyjnn"). Mirrors extract_features' own bare-domain tolerance
+    (prepends http:// when no scheme is present) so validation and
+    feature extraction always agree on what counts as a URL - this is a
+    pre-filter in front of the model, not a second feature pipeline.
+
+    Deliberately NOT ASCII-only: a homoglyph/IDN domain (e.g. Cyrillic
+    'o's standing in for Latin ones) must still be considered a valid
+    URL and reach the typosquat/model stages - that's precisely the kind
+    of domain this tool exists to catch, not something to pre-reject.
+
+    Deliberately permissive when a scheme was explicitly given but the
+    host still can't be extracted (e.g. "https://[::1/", an unbracketed
+    IPv6 literal): _safe_urlparse already has documented, tested recovery
+    behavior for exactly this case, feeding the model a "no host" signal
+    rather than a verdict-less rejection. A string the user bothered to
+    prefix with a real scheme is a URL attempt, not a random word - let
+    the existing pipeline judge it instead of a second, stricter gate."""
+    url = (url or "").strip()
+    if not url:
+        return False
+    had_scheme = bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url))
+    candidate = url if had_scheme else "http://" + url
+    parsed = _safe_urlparse(candidate)
+    host = parsed.hostname or ""
+    if not host:
+        return had_scheme
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    if "." not in host:
+        return False
+    tld = host.rsplit(".", 1)[-1]
+    return len(tld) >= 2 and not tld.isdigit()
+
+
 def _safe_port(parsed) -> int | None:
     """parsed.port raises ValueError for out-of-range (>65535) or
     non-integer ports. An unparseable port

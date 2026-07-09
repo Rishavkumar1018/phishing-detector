@@ -2,38 +2,219 @@
 <html>
 <head>
 <title>Phishing Website Checker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@700;800&display=swap" rel="stylesheet">
 <style>
-  body { background:#0b0f19; color:#e5e7eb; font-family:-apple-system,sans-serif;
-         display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
-  .card { background:#111827; border-radius:12px; padding:28px 32px; width:420px;
-          box-shadow:0 4px 24px rgba(0,0,0,.4); }
-  h1 { font-size:20px; margin:0 0 4px; }
-  p.sub { color:#9ca3af; font-size:13px; margin:0 0 16px; }
-  .row { display:flex; gap:8px; }
-  input { flex:1; background:#0b0f19; border:1px solid #374151; color:#e5e7eb;
-          border-radius:8px; padding:10px 12px; font-size:14px; }
-  button { background:#2563eb; color:white; border:none; border-radius:8px;
-           padding:10px 18px; font-size:14px; cursor:pointer; }
-  button:disabled { opacity:.6; cursor:default; }
-  .result { margin-top:18px; font-size:14px; }
-  .badge { display:inline-block; padding:3px 10px; border-radius:12px; font-weight:600; font-size:12px; }
-  .safe { background:#064e3b; color:#6ee7b7; }
-  .unsafe { background:#4c0519; color:#fca5a5; }
-  .meta { color:#6b7280; font-size:12px; margin-top:10px; border-top:1px solid #1f2937; padding-top:10px; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: #0b0b0f;
+    color: #e8eaed;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  .logo {
+    position: absolute;
+    top: 24px;
+    left: 32px;
+    z-index: 3;
+    font-family: 'Manrope', sans-serif;
+    font-weight: 700;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+    color: #f5f5f5;
+  }
+
+  .page {
+    position: relative;
+    min-height: 100vh;
+    width: 100%;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* --- Breathing glow behind the search bar --- */
+  .glow-wrap {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+  .glow {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity .7s ease;
+  }
+  .glow.active { opacity: 1; }
+  .glow-inner {
+    width: min(60vw, 640px);
+    height: min(60vw, 640px);
+    border-radius: 50%;
+    filter: blur(90px);
+    animation: breathe 4s ease-in-out infinite;
+  }
+  .glow-blue .glow-inner   { background: radial-gradient(circle, rgba(59,130,246,.55), transparent 70%); }
+  .glow-green .glow-inner  { background: radial-gradient(circle, rgba(16,185,129,.55), transparent 70%); }
+  .glow-red .glow-inner    { background: radial-gradient(circle, rgba(239,68,68,.55), transparent 70%); }
+  .glow-yellow .glow-inner { background: radial-gradient(circle, rgba(234,179,8,.55), transparent 70%); }
+
+  @keyframes breathe {
+    0%, 100% { transform: scale(1);    opacity: .7; }
+    50%      { transform: scale(1.12); opacity: 1;  }
+  }
+
+  /* --- Content --- */
+  .content {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    max-width: 750px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .welcome {
+    font-family: 'Manrope', sans-serif;
+    font-size: 52px;
+    font-weight: 800;
+    line-height: 1.15;
+    color: #f1f3f4;
+    text-align: center;
+    margin: 0 0 36px;
+  }
+
+  .searchbar {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    background: #1e1e1e;
+    border-radius: 9999px;
+    padding: 6px 6px 6px 22px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.4);
+  }
+
+  input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #e8eaed;
+    font-family: 'Inter', sans-serif;
+    font-size: 16px;
+    padding: 12px 0;
+    min-width: 0;
+  }
+  input::placeholder { color: #8a8f98; }
+
+  button {
+    position: relative;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 9999px;
+    padding: 12px 24px;
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform .15s ease, background .2s ease, opacity .2s ease;
+    flex-shrink: 0;
+  }
+  button:hover:not(:disabled) { background: #3b74f0; }
+  button:active:not(:disabled) { transform: scale(.95); }
+  button:disabled { opacity: .7; cursor: default; }
+
+  .btn-spinner {
+    display: none;
+    width: 15px;
+    height: 15px;
+    border: 2px solid rgba(255,255,255,.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  button.loading .btn-text { display: none; }
+  button.loading .btn-spinner { display: inline-block; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .result {
+    margin-top: 22px;
+    font-size: 14px;
+    text-align: center;
+    min-height: 20px;
+  }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-weight: 600; font-size: 12px; }
+  .safe { background: #064e3b; color: #6ee7b7; }
+  .unsafe { background: #4c0519; color: #fca5a5; }
+  .invalid { background: #facc15; color: #1c1500; }
+
+  .disclaimer {
+    color: rgba(255,255,255,.6);
+    font-size: 14px;
+    font-style: italic;
+    text-align: center;
+    margin-top: 18px;
+  }
+
+  @media (max-width: 480px) {
+    .logo { top: 16px; left: 20px; font-size: 17px; }
+    .welcome { font-size: 2.1rem; margin-bottom: 24px; }
+    .searchbar { padding: 6px 6px 6px 16px; }
+    button { padding: 11px 18px; }
+  }
 </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Phishing Website Checker</h1>
-    <p class="sub">Enter a URL to see if this website is safe or unsafe.</p>
-    <div class="row">
-      <input id="urlInput" value="https://www.example.com/" />
-      <button id="checkBtn" onclick="checkUrl()">Check</button>
+  <div class="logo">LexSentinel</div>
+  <div class="page">
+    <div class="glow-wrap">
+      <div class="glow glow-blue active"><div class="glow-inner"></div></div>
+      <div class="glow glow-green"><div class="glow-inner"></div></div>
+      <div class="glow glow-red"><div class="glow-inner"></div></div>
+      <div class="glow glow-yellow"><div class="glow-inner"></div></div>
     </div>
-    <div id="result" class="result"></div>
+
+    <div class="content">
+      <h1 class="welcome" id="greeting"></h1>
+
+      <div class="searchbar">
+        <input id="urlInput" placeholder="Enter a URL to check" />
+        <button id="checkBtn" onclick="checkUrl()">
+          <span class="btn-text">Check</span>
+          <span class="btn-spinner"></span>
+        </button>
+      </div>
+
+      <div id="result" class="result"></div>
+      <div class="disclaimer">The model can make mistakes.</div>
+    </div>
   </div>
 
 <script>
+const GREETINGS = [
+  "What link are we checking today?",
+  "Suspicious URL? Let's find out.",
+  "Stay one step ahead of phishing.",
+  "Trust, but verify.",
+  "Got a link that feels off? Check it here.",
+  "Every link deserves a second look.",
+  "Paste a URL — we'll do the rest.",
+  "One check, peace of mind.",
+];
+document.getElementById('greeting').textContent =
+  GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+
 // Escapes attacker-controlled text before it goes into innerHTML.
 // checked_url/note are user-controlled (checking
 // a suspicious URL IS the use case) and were interpolated raw into a
@@ -45,6 +226,11 @@ function escapeHtml(s) {
   const div = document.createElement('div');
   div.textContent = s == null ? '' : String(s);
   return div.innerHTML;
+}
+
+function setGlow(state) {
+  document.querySelectorAll('.glow').forEach(g => g.classList.remove('active'));
+  document.querySelector('.glow-' + state).classList.add('active');
 }
 
 // AbortController ties each response to the request that produced it, so a
@@ -64,6 +250,7 @@ async function checkUrl() {
 
   const btn = document.getElementById('checkBtn');
   btn.disabled = true;
+  btn.classList.add('loading');
 
   try {
     const res = await fetch('/api/check', {
@@ -77,24 +264,36 @@ async function checkUrl() {
     // Guard: only render if this is still the most recent request.
     if (thisController !== currentController) return;
 
+    if (data.status === 'invalid') {
+      setGlow('yellow');
+      document.getElementById('result').innerHTML = `
+        <span class="badge invalid">INVALID</span>
+        ${escapeHtml(data.message || "This doesn't look like a valid URL.")}`;
+      return;
+    }
+
     const badgeClass = data.verdict === 'safe' ? 'safe' : 'unsafe';
-    const confidenceStr = data.confidence != null
-      ? ` (model confidence: ${(data.confidence*100).toFixed(1)}%)` : '';
+    setGlow(data.verdict === 'safe' ? 'green' : 'red');
+    const chancePct = data.confidence != null
+      ? (data.verdict === 'safe' ? (1 - data.confidence) : data.confidence) * 100
+      : null;
+    const chanceStr = chancePct != null
+      ? ` ${chancePct.toFixed(1)}% chance this is ${data.verdict}.` : '';
     const noteStr = data.note ? `<br/><span style="color:#fca5a5">${escapeHtml(data.note)}</span>` : '';
     document.getElementById('result').innerHTML = `
       <span class="badge ${badgeClass}">${data.verdict.toUpperCase()}</span>
-      This website is ${data.verdict}.${confidenceStr}${noteStr}
-      <div class="meta">
-        Checked URL: ${escapeHtml(data.checked_url)}<br/>
-        Decision stage: ${data.stage}${data.model_version ? ' &middot; model ' + data.model_version : ''}
-      </div>`;
+      This website is ${data.verdict}.${chanceStr}${noteStr}`;
   } catch (err) {
     if (err.name !== 'AbortError') {
+      setGlow('blue');
       document.getElementById('result').innerHTML =
         `<span style="color:#f87171">Error checking URL.</span>`;
     }
   } finally {
-    if (thisController === currentController) btn.disabled = false;
+    if (thisController === currentController) {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+    }
   }
 }
 </script>

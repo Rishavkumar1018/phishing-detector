@@ -1,20 +1,7 @@
 const params = new URLSearchParams(window.location.search);
 const blockedUrl = params.get("url") || "";
-const stage = params.get("stage") || "";
-const confidence = params.get("confidence");
-const note = params.get("note") || "";
 
 document.getElementById("blockedUrl").textContent = blockedUrl;
-
-const stageLabels = {
-  blocklist: "matched a known-malicious domain list",
-  typosquat: "closely resembles a known legitimate site",
-  model: "flagged by the machine learning model",
-};
-let detailsText = stageLabels[stage] || "flagged as unsafe";
-if (confidence) detailsText += ` (confidence: ${(parseFloat(confidence) * 100).toFixed(1)}%)`;
-if (note) detailsText += ` — ${note}`;
-document.getElementById("detailsBox").textContent = detailsText;
 
 function goBack() {
   if (window.history.length > 1) {

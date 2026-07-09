@@ -132,13 +132,18 @@ def test_no_raw_unescaped_interpolation_in_served_html():
         for var in ["checked_url", "note"]:
             raw_pattern = re.compile(r"\$\{(?:data\.|r\.)" + var + r"\}")
             escaped_pattern = re.compile(r"escapeHtml\((?:data\.|r\.)" + var + r"\)")
+            referenced_pattern = re.compile(r"(?:data\.|r\.)" + var + r"\b")
             raw_hits = raw_pattern.findall(html)
             assert not raw_hits, f"Found unescaped ${{...{var}}} interpolation(s) in {name}: {raw_hits}"
-        # both fields should actually be escaped somewhere in each file
-        checked_url_escaped = re.search(r"escapeHtml\((?:data\.|r\.)checked_url\)", html)
-        note_escaped = re.search(r"escapeHtml\((?:data\.|r\.)note\)", html)
-        assert checked_url_escaped, f"checked_url is never passed through escapeHtml() in {name}"
-        assert note_escaped, f"note is never passed through escapeHtml() in {name}"
+            # A field only needs to be escaped where it's actually rendered.
+            # index.html deliberately no longer displays checked_url at all
+            # (removed from the UI) - nothing displayed means no XSS surface
+            # for that field on that page. Where a field IS referenced, it
+            # must go through escapeHtml() - that's the real invariant.
+            if referenced_pattern.search(html):
+                assert escaped_pattern.search(html), (
+                    f"{var} is referenced but never passed through escapeHtml() in {name}"
+                )
 
 
 def test_popup_js_escapes_note_field():

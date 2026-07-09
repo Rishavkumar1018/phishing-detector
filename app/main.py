@@ -50,7 +50,7 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
-from core.features import extract_features, extract_features_batch, _safe_urlparse
+from core.features import extract_features, extract_features_batch, _safe_urlparse, is_valid_url
 from core.registry import load_current_model, ModelNotFoundError
 from core.lists import is_allowlisted, is_blocklisted, reload_lists
 from core.typosquat import find_typosquat_match
@@ -129,11 +129,13 @@ class CheckRequest(BaseModel):
 
 class CheckResponse(BaseModel):
     checked_url: str
-    verdict: str          # "safe" | "unsafe"
-    stage: str            # "blocklist" | "allowlist" | "typosquat" | "model"
+    status: str = "ok"     # "ok" | "invalid"
+    verdict: str | None = None   # "safe" | "unsafe" (None when status="invalid")
+    stage: str | None = None     # "blocklist" | "allowlist" | "typosquat" | "model"
     confidence: float | None = None
     model_version: str | None = None
     note: str | None = None
+    message: str | None = None   # user-facing explanation when status="invalid"
 
 
 class BulkCheckRequest(BaseModel):
@@ -204,6 +206,13 @@ def admin_reload():
 @app.post("/api/check", response_model=CheckResponse)
 def check_url(payload: CheckRequest):
     url = payload.url.strip()
+
+    if not is_valid_url(url):
+        return CheckResponse(
+            checked_url=url,
+            status="invalid",
+            message="This doesn't look like a valid URL. Please enter a full website address.",
+        )
 
     early = _decide_stage1(url)
     if early is not None:
