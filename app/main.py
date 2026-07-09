@@ -51,10 +51,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 from core.features import extract_features, extract_features_batch, _safe_urlparse, is_valid_url
-from core.registry import load_current_model, ModelNotFoundError
+from core.registry import load_current_model, ModelNotFoundError, DECISION_THRESHOLD
 from core.lists import is_allowlisted, is_blocklisted, reload_lists
 from core.typosquat import find_typosquat_match
-from core.auth import require_dev_key, get_or_create_dev_key
+from core.auth import require_dev_key
 
 # Structured logging of verdicts/stages - domain + outcome only, NEVER the
 # full URL (path/query can carry search terms, tokens, session data - the
@@ -107,20 +107,11 @@ MAX_BULK_URLS = 5000  # guard against an accidental multi-hour request
 MAX_URL_LENGTH = 2048  # matches CheckRequest's existing cap
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB - well past any real URL-list file
 
-# the safe/unsafe cutoff used to be a magic 0.5
-# written TWICE (single-check + bulk-check paths) - the exact "two paths
-# silently diverge" failure mode this codebase otherwise guards against
-# everywhere else (core/features.py's whole reason to exist). One
-# constant, one place to change it.
-#
-# TODO (deferred - review's own suggestion): 0.5 is almost never the
-# right operating point for a security product with asymmetric
-# false-positive/false-negative costs, and there's no "uncertain" band -
-# a 50.1% score renders identically to 99.9%. Tuning this from the
-# validation PR curve at a target precision, and adding a three-way
-# verdict (safe/suspicious/unsafe), is real follow-up work - not done
-# here, this fix only removes the duplication.
-DECISION_THRESHOLD = 0.5
+# DECISION_THRESHOLD (the safe/unsafe cutoff) is imported from
+# core/registry.py - it used to be defined here, but models/evaluate.py
+# hardcoded its own 0.5 to apply the same policy, recreating the exact
+# "same value written twice" problem this constant was created to fix.
+# One definition, next to model loading, shared by serving + evaluation.
 
 # One message for both the single-check and bulk paths - same "two paths
 # must never diverge" rule as DECISION_THRESHOLD above.

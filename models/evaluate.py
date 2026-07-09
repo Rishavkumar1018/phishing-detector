@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 
-from core.registry import load_current_model
+from core.registry import load_current_model, DECISION_THRESHOLD
 from core.features import extract_features_batch
 
 # ---------------------------------------------------------------------
@@ -108,7 +108,9 @@ def _evaluate_realistic_heldout(pipeline) -> dict:
     y_true = [label for _, label in REALISTIC_HELDOUT_URLS]
     feats_df = extract_features_batch(urls)
     probs = pipeline.predict_proba(feats_df)[:, 1]
-    y_pred = [1 if p >= 0.5 else 0 for p in probs]
+    # Same cutoff the serving layer applies - a hardcoded 0.5 here would
+    # silently diverge from production the day the threshold is tuned.
+    y_pred = [1 if p >= DECISION_THRESHOLD else 0 for p in probs]
     metrics = _compute_metrics(y_true, y_pred)
     metrics["misclassified"] = [
         {"url": u, "true_label": t, "predicted": p, "probability": float(prob)}
@@ -141,7 +143,7 @@ def _evaluate_phiusiil_test(pipeline) -> dict:
     y_true = y.loc[test_idx].tolist()
     feats_df = extract_features_batch(test_urls)
     probs = pipeline.predict_proba(feats_df)[:, 1]
-    y_pred = [1 if p >= 0.5 else 0 for p in probs]
+    y_pred = [1 if p >= DECISION_THRESHOLD else 0 for p in probs]
     return _compute_metrics(y_true, y_pred)
 
 

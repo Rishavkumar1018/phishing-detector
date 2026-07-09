@@ -11,15 +11,13 @@ file. This is deliberate: it is structurally impossible to load a model
 without also loading the exact vectorizer it was trained with, because
 they are one serialized object. No more "which .pkl is the real one."
 """
-import sys, os, json, hashlib, subprocess
+import sys, os, json, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
-import numpy as np
-from scipy import sparse
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline

@@ -23,6 +23,20 @@ from sklearn.pipeline import Pipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS_DIR = PROJECT_ROOT / "models" / "artifacts"
 
+# The safe/unsafe operating point applied to the model's phishing
+# probability. Lives HERE, next to model loading, because both the
+# serving layer (app/main.py) and the offline evaluation
+# (models/evaluate.py) must apply the SAME cutoff - otherwise reported
+# metrics stop describing what the product actually does.
+#
+# TODO (deferred - a prior review's own suggestion): 0.5 is almost never
+# the right operating point for a security product with asymmetric
+# false-positive/false-negative costs, and there's no "uncertain" band -
+# a 50.1% score renders identically to 99.9%. Tuning this from the
+# validation PR curve at a target precision, and adding a three-way
+# verdict (safe/suspicious/unsafe), is real follow-up work.
+DECISION_THRESHOLD = 0.5
+
 
 class ModelNotFoundError(RuntimeError):
     pass
