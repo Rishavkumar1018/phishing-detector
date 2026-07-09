@@ -14,6 +14,7 @@ they are one serialized object. No more "which .pkl is the real one."
 import sys, os, json, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -210,7 +211,9 @@ def main():
             "COMMON_TLDS and SUSPICIOUS_PATH_KEYWORDS are small curated lists - expand via config, not by editing code.",
             "No content/rendering features by design (WAF-safety tradeoff)",
             f"Training augmented with {len(REAL_BENIGN_URLS_WITH_PATHS) + len(REAL_BENIGN_ROOT_URLS_WITH_TRAILING_SLASH)} "
-            f"real benign URLs across ~94 distinct domains (x{AUGMENTATION_REPLICATION} replication, reduced "
+            f"real benign URLs across "
+            f"{len({urlparse(u).hostname for u in REAL_BENIGN_URLS_WITH_PATHS + REAL_BENIGN_ROOT_URLS_WITH_TRAILING_SLASH})} "
+            f"distinct hostnames (x{AUGMENTATION_REPLICATION} replication, reduced "
             "from 40x after a 100K-URL evaluation proved high replication of a small set causes "
             "memorization, not generalization) because PhiUSIIL's legitimate "
             "class is 100% bare-homepage URLs with zero real-path examples Still "

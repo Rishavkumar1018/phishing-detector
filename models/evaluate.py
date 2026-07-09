@@ -94,12 +94,26 @@ REALISTIC_HELDOUT_URLS: list[tuple[str, int]] = (
 
 
 def _compute_metrics(y_true: list[int], y_pred: list[int]) -> dict:
+    # FPR/FNR computed directly (not via sklearn's confusion_matrix) so a
+    # single-class edge case (e.g. an all-benign URL list) can't crash on
+    # matrix shape. FPR = benign URLs wrongly called phishing / all benign;
+    # FNR = phishing wrongly called safe / all phishing - the two costs a
+    # phishing checker actually trades off (a bare accuracy number hides
+    # which side is failing).
+    fp = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 1)
+    fn = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 0)
+    n_benign = sum(1 for t in y_true if t == 0)
+    n_phish = sum(1 for t in y_true if t == 1)
     return {
         "n": len(y_true),
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        "false_positive_rate": (fp / n_benign) if n_benign else 0.0,
+        "false_negative_rate": (fn / n_phish) if n_phish else 0.0,
+        "n_false_positives": fp,
+        "n_false_negatives": fn,
     }
 
 

@@ -28,6 +28,21 @@ strings. Replication is correspondingly much lower (see
 models/train.py) - high replication of a small set is the mechanism that
 caused the memorization problem in the first place, not just an
 efficiency question.
+
+v3 (2026-07-09): the realistic held-out evaluation (models/evaluate.py)
+still showed a 47% false-positive rate on legitimate content URLs -
+every error was a benign page with a hyphenated multi-word path on a
+domain/category the model had never seen benign. Expanded with ~105 more
+real, search-sourced URLs across 12 additional categories (car
+maintenance, gardening, museums, university admissions, music lessons,
+travel visas, home DIY, chess, parenting, astronomy, cycling, coffee),
+deliberately including non-.com TLDs (.edu, .org, .gov.uk, .co.uk,
+.nhs.uk, .si.edu) that were underrepresented. IMPORTANT for anyone
+adding more: these categories were chosen to stay DISJOINT from
+models/evaluate.py's held-out categories (freelance taxes, puppy
+training) - adding URLs from those categories would contaminate the
+held-out measurement and make the numbers meaningless. Replication
+multiplier unchanged (8x - see the memorization warning above).
 """
 
 REAL_BENIGN_URLS_WITH_PATHS = [
@@ -182,6 +197,144 @@ REAL_BENIGN_URLS_WITH_PATHS = [
     "https://www.apartments.com/near-me/apartments-for-rent/",
     "https://www.rentable.co/",
     "https://www.renthop.com/",
+
+    # ================= v3 additions (2026-07-09) =================
+    # All real, search-sourced. See module docstring: 12 new categories,
+    # disjoint from models/evaluate.py's held-out categories.
+
+    # --- Car maintenance / DIY auto ---
+    "https://www.autozone.com/diy/motor-oil/easy-steps-to-change-your-oil",
+    "https://www.castrol.com/en_us/united-states/home/learn/car-maintenance/how-to-change-your-engine-oil.html",
+    "https://www.dummies.com/article/home-auto-hobbies/automotive/car-repair-maintenance/engines/how-to-change-your-cars-oil-202864/",
+    "https://www.wyotech.edu/guides/how-to-change-car-oil-5-steps/",
+    "https://www.mopar.com/en-us/blog/how-to-change-your-vehicle-engine-oil-a-step-by-step-mopar-oil-change-guide.html",
+    "https://www.slashgear.com/1708004/how-change-your-oil-step-by-step-guide/",
+    "https://engineauditor.com/how-to-change-car-engine-oil-at-home/",
+    "https://www.truecar.com/blog/how-to-change-your-engine-oil/",
+    "https://www.mymotorworld.com/blog/how-to-change-oil-in-a-car-my-motor-worlds-guide-to-changing-your-engine-oil-",
+
+    # --- Gardening ---
+    "https://www.themakermakes.com/blog/growing-tomatoes-for-beginners",
+    "https://www.foodgardenlife.com/learn/grow-tomato-seeds",
+    "https://www.epicgardening.com/grow-tomatoes-from-seed/",
+    "https://www.gardeners.com/blogs/tomato-growing-articles/video-slideshow-growing-tomatoes-7902",
+    "https://www.bbg.org/article/starting_tomatoes_from_seed",
+    "https://www.almanac.com/starting-tomato-seeds-indoors",
+    "https://savvygardening.com/growing-tomatoes-from-seed/",
+    "https://scottsmiraclegro.com/en-us/learn/gardening/growing-tomatoes-how-to-grow-tomatoes-from-seeds.html",
+    "https://www.creativevegetablegardener.com/starting-tomatoes-from-seed/",
+
+    # --- Museums / cultural institutions (.org-heavy) ---
+    "https://www.amnh.org/plan-your-visit",
+    "https://www.mcny.org/visit",
+    "https://www.metmuseum.org/plan-your-visit",
+    "https://www.guggenheim.org/plan-your-visit",
+    "https://intrepidmuseum.org/plan-your-visit/visitor-information",
+    "https://www.ushmm.org/information/visit-the-museum/plan-your-visit",
+    "https://californiamuseum.org/visit/",
+    "https://nmaahc.si.edu/visit/plan-your-visit",
+    "https://intrepidmuseum.org/plan-your-visit/visitor-information/tickets",
+
+    # --- University admissions (.edu) ---
+    "https://www.seattleu.edu/admissions-aid/undergraduate-admissions/first-year-admissions/how-to-apply/admission-requirements/",
+    "https://educationusa.state.gov/your-5-steps-us-study/complete-your-application/undergraduate",
+    "https://www.nyu.edu/admissions/undergraduate-admissions/how-to-apply.html",
+    "https://www.uh.edu/undergraduate-admissions/apply/",
+    "https://admissions.charlotte.edu/apply/first-year-students/application-requirements/",
+    "https://admission.universityofcalifornia.edu/admission-requirements/",
+    "https://admit.washington.edu/apply/first-year/",
+    "https://www.sandiego.edu/admission-and-aid/undergraduate/apply/application-requirements.php",
+    "https://admissions.ua.edu/apply/",
+    "https://admission.ucla.edu/apply/first-year",
+
+    # --- Music lessons / guitar ---
+    "https://www.schoolofrock.com/resources/guitar/guitar-chords-for-beginners",
+    "https://www.imusic-school.com/en/tools/guitar-chords/beginner/",
+    "https://www.guitarnoise.com/lessons/absolute-beginner-part-1/",
+    "https://www.soundguitarlessons.com/blog/how-to-learn-guitar-chords-1",
+    "https://www.theguitarlesson.com/guitar-theory/",
+    "https://www.justinguitar.com/beginner",
+    "https://artiumacademy.com/blogs/what-is-guitar-music-theory-behind-notes-chords-scales/",
+    "https://www.stringkick.com/blog-lessons/guitar-music-theory/",
+
+    # --- Travel / visas (.gov.uk, .co.uk, .org.uk) ---
+    "https://www.gov.uk/standard-visitor",
+    "https://www.gov.uk/standard-visitor/apply-standard-visitor-visa",
+    "https://www.gov.uk/browse/visas-immigration/tourist-short-stay-visas",
+    "https://www.visitbritain.com/en/plan-your-trip/visa-and-immigration-information",
+    "https://www.davidsonmorris.com/documents-required-for-uk-visitor-visa/",
+    "https://www.ein.org.uk/blog/what-documents-are-required-when-applying-uk-visitor-visa",
+    "https://reissedwards.co.uk/immigration/uk-visitor-visa/",
+    "https://legalclarity.org/uk-tourist-visa-requirements-documents-and-how-to-apply/",
+
+    # --- Home improvement / DIY plumbing ---
+    "https://www.lowes.com/n/how-to/repair-a-leaky-faucet/",
+    "https://www.familyhandyman.com/project/how-to-repair-a-kitchen-faucet/",
+    "https://westernrooter.com/leaky-faucet-repair-diy-fixes-for-dripping-faucets/",
+    "https://www.homedepot.com/c/ah/how-to-fix-a-leaky-faucet/9ba683603be9fa5395fab90ee6659fb",
+    "https://bonfe.com/blog/diy-guide-fix-a-leaky-faucet-in-5-simple-steps/",
+    "https://mintera.com/blogs/news/diy-easiest-way-to-fix-a-leaky-faucet",
+    "https://www.edwardsenterprisescc.com/plumbing/leaky-faucet-repair-diy/",
+    "https://www.poolesplumbing.com/blog/fix-a-leaky-faucet-without-calling-a-plumber/",
+    "https://www.benjaminfranklinplumbing.com/doylestown/blog/2018/june/diy-fix-a-leaky-faucet-in-10-simple-steps/",
+
+    # --- Chess / board games ---
+    "https://www.chess.com/article/view/the-best-chess-openings-for-beginners",
+    "https://shop.worldchess.com/blogs/news/chess-openings-for-beginners",
+    "https://www.chess.com/article/view/study-plan-for-beginners-the-opening",
+    "https://www.chessable.com/blog/10-chess-openings-for-beginners/",
+    "https://northtexaschessacademy.com/chess-openings-for-beginners-guide/",
+    "https://dwheeler.com/chess-openings/",
+    "https://www.amazon.com/Chess-Openings-Beginners-Essential-Strategies/dp/1638076790",
+    "https://chessiverse.com/blog/how-to-master-chess-opening-strategies-a-beginners-guide",
+    "https://www.thechesswebsite.com/chess-openings/",
+
+    # --- Parenting / toddler sleep (.nhs.uk included) ---
+    "https://www.healthychildren.org/English/healthy-living/sleep/Pages/bedtime-trouble.aspx",
+    "https://www.takingcarababies.com/blogs/sleep-schedules/toddler-nap-schedules-for-2-3-and-4-year-olds",
+    "https://kidshealth.org/en/parents/sleep12yr.html",
+    "https://www.bedslutonchildrenshealth.nhs.uk/sleep/healthy-sleep-routines/sleep-routines-for-toddlers-and-children/",
+    "https://www.pampers.com/en-us/toddler/sleep/article/understanding-toddler-sleep",
+    "https://www.metropediatrics.com/pediatric-blog/how-to-help-your-toddler-sleep/",
+    "https://www.arestfulnight.com/blog/toddler-sleep-schedule",
+    "https://www.heavensentsleep.com/blog/a-comprehensive-guide-to-toddler-sleep-schedules",
+    "https://www.enfamil.com/articles/toddler-bedtime-routine/",
+    "https://ducklingselc.com/blog/2025/02/toddler-sleep-schedule/",
+
+    # --- Astronomy / stargazing ---
+    "https://skyandtelescope.org/astronomy-resources/stargazing-basics/",
+    "https://www.skyatnightmagazine.com/advice/skills/stargazing-top-tips",
+    "https://www.planetary.org/articles/a-beginners-guide-to-stargazing",
+    "https://telescopeguides.com/stargazing-101-an-introductory-guide/",
+    "https://www.skyatnightmagazine.com/advice/astronomy-for-beginners",
+    "https://exploringthenightsky.com/stargazing-for-beginners/",
+    "https://cosmicpursuits.com/start-here-stargazing-basics/",
+    "https://www.telescopeadvisor.com/how-to-start-stargazing/",
+    "https://www.telescopr.com/tips-for-stargazing",
+
+    # --- Cycling / bike maintenance ---
+    "https://www.rei.com/learn/expert-advice/bike-maintenance.html",
+    "https://www.rei.com/learn/series/intro-to-bike-maintenance",
+    "https://365cycles.com/blogs/general/bike-chain-maintenance",
+    "https://diybikefix.com/bike-chain-maintenance/",
+    "https://www.rei.com/learn/expert-advice/bike-chain.html",
+    "https://rouvy.com/blog/how-to-clean-bike-chain",
+    "https://www.bikeradar.com/advice/workshop/how-to-clean-a-bike-chain",
+    "https://www.schwinnbikes.com/blogs/compass/how-to-maintain-your-bike-chain",
+    "https://mountainbikeinsider.com/mountain-bike-chain-maintenance/",
+    "https://www.thecrucible.org/guides/bike-maintenance/repair-a-bike/",
+
+    # --- Coffee brewing ---
+    "https://handground.com/french-press-coffee-to-water-ratio-calculator",
+    "https://beanbox.com/blog/how-to-use-a-french-press",
+    "https://myhomebarista.com/guides/pour-over-vs-french-press/",
+    "https://thecoffeeclubshop.com/blogs/barista-blog/french-press-coffee-ratios-how-to-brew-espresso-hacks",
+    "https://craftcoffeespot.com/french-press-coffee/",
+    "https://counterculturecoffee.com/blogs/counter-culture-coffee/coffee-basics-brewing-ratios",
+    "https://espro.com/blogs/news/french-press-coffee-ratio",
+    "https://coffeebrewshub.com/blog/coffee-to-water-ratio",
+    "https://www.stonecreekcoffee.com/blogs/news/coffee-to-water-ratio-coffee-brew-ratio-guide",
+    "https://coffeebros.com/blogs/coffee/the-perfect-pour-over-guide",
 ]
 
 # Bare-root URLs WITH a trailing slash - PhiUSIIL's legitimate class has
