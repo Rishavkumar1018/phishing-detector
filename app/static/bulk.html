@@ -24,6 +24,7 @@
   th { color:#9ca3af; font-weight:600; }
   .safe { color:#6ee7b7; }
   .unsafe { color:#fca5a5; }
+  .invalid { color:#fde047; }
   .summary { margin-top:16px; font-size:13px; color:#9ca3af; }
   .divider { border-top:1px solid #1f2937; margin:20px 0; }
 </style>
@@ -78,16 +79,26 @@ function renderResults(data) {
   const s = data.summary;
   document.getElementById('summary').innerHTML =
     `Total: ${s.total} &middot; Safe: ${s.safe} &middot; Unsafe: ${s.unsafe} ` +
+    (s.invalid ? `&middot; Invalid: ${s.invalid} ` : '') +
     `&middot; By stage: ${Object.entries(s.by_stage).map(([k,v]) => k+'='+v).join(', ')}`;
 
-  let rows = data.results.map(r => `
+  // Rows with status="invalid" carry verdict=null (the backend refuses to
+  // score a non-URL) - render them as their own state instead of calling
+  // .toUpperCase() on null.
+  let rows = data.results.map(r => {
+    const invalid = r.status === 'invalid' || !r.verdict;
+    const verdictCell = invalid
+      ? `<td class="invalid">INVALID</td>`
+      : `<td class="${r.verdict}">${r.verdict.toUpperCase()}</td>`;
+    return `
     <tr>
       <td>${escapeHtml(r.checked_url)}</td>
-      <td class="${r.verdict}">${r.verdict.toUpperCase()}</td>
-      <td>${r.stage}</td>
+      ${verdictCell}
+      <td>${r.stage || '&mdash;'}</td>
       <td>${r.confidence != null ? (r.confidence*100).toFixed(1)+'%' : ''}</td>
-      <td>${escapeHtml(r.note) || ''}</td>
-    </tr>`).join('');
+      <td>${escapeHtml(r.note) || escapeHtml(r.message) || ''}</td>
+    </tr>`;
+  }).join('');
 
   document.getElementById('resultsContainer').innerHTML = `
     <table>
@@ -98,8 +109,12 @@ function renderResults(data) {
 
 async function checkPasted() {
   const key = getKey();
+  // Split on real newlines (handles Windows \r\n too). This was
+  // .split('\\n') - a literal backslash-n, which never appears in
+  // textarea input - so ALL pasted URLs were concatenated and sent as
+  // one giant "URL". The paste feature was completely broken.
   const urls = document.getElementById('pasteInput').value
-    .split('\\n').map(u => u.trim()).filter(Boolean);
+    .split(/\r?\n/).map(u => u.trim()).filter(Boolean);
   if (!urls.length) return;
   document.getElementById('pasteBtn').disabled = true;
   try {

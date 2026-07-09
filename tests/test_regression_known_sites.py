@@ -256,6 +256,38 @@ def test_combosquatting_brand_plus_suspicious_word_is_caught():
         assert data["stage"] == "typosquat", f"{url} -> {data}"
 
 
+def test_brand_prefix_on_legit_product_and_regional_subdomains_not_flagged():
+    """2026-07-09 audit: confirmed live false positives. The
+    subdomain-prefix check (typosquat Check 1) flagged any host whose
+    first label equals a protected brand core - but 'outlook', 'office',
+    'zoom', 'usa' are ALSO ordinary product/regional subdomain labels on
+    major legitimate sites (outlook.live.com IS Microsoft's webmail), and
+    cores under 3 chars ('id' from id.me, 'x' from x.com) collide with
+    ubiquitous 'id.' subdomains (id.atlassian.com is Atlassian's real
+    login domain). The extension redirected all of these to the phishing
+    warning page."""
+    for url in ["https://outlook.live.com/mail/", "https://id.atlassian.com/",
+                "https://usa.philips.com/", "https://zoom.harvard.edu/",
+                "https://x.kompany.com/", "https://office.company-intranet.com/"]:
+        resp = client.post("/api/check", json={"url": url})
+        assert resp.json()["stage"] != "typosquat", f"{url} -> {resp.json()}"
+
+
+def test_brand_prefix_with_corroboration_still_caught():
+    """The other half of the fix above: generic-prefix cores still flag
+    when a corroborating signal is present (suspicious term in another
+    host label or the path, or an unusual TLD) - a real attack pairs the
+    brand label with a lure word or cheap TLD. And strict cores (irs,
+    paypal) keep the original zero-corroboration behavior."""
+    for url in ["https://outlook.secure-signin.com/", "https://usa.tax-refund.top/",
+                "https://zoom.meeting-verify.com/", "https://irs.mynewsblog.net/",
+                "https://paypal.evil-site.net/"]:
+        resp = client.post("/api/check", json={"url": url})
+        data = resp.json()
+        assert data["verdict"] == "unsafe", f"{url} -> {data}"
+        assert data["stage"] == "typosquat", f"{url} -> {data}"
+
+
 def test_combosquatting_requires_corroboration_not_just_common_words():
     """Real false-positive risk found while building the fix: 'apple',
     'usa', and 'jio' are all protected cores that are ALSO ordinary

@@ -65,6 +65,33 @@ def test_csv_injection_escaped():
         assert not line.startswith(("=", "+", "-", "@"))
 
 
+def test_xff_client_id_uses_last_hop_not_client_supplied_first(monkeypatch):
+    """2026-07-09 audit: in production the rate-limit client ID was the
+    FIRST X-Forwarded-For entry - which is whatever the client claims.
+    An attacker could rotate fake IPs to bypass the limit, or spoof the
+    real developer's IP to lock them out. The platform proxy (Render)
+    APPENDS the IP it actually saw, so the LAST entry is the trustworthy
+    one."""
+    import core.auth as auth
+
+    class FakeClient:
+        host = "10.0.0.1"
+
+    class FakeRequest:
+        headers = {"x-forwarded-for": "6.6.6.6, 203.0.113.9"}
+        client = FakeClient()
+
+    monkeypatch.setattr(auth, "_TRUST_PROXY_HEADERS", True)
+    assert auth._get_client_id(FakeRequest()) == "203.0.113.9", (
+        "Client ID must come from the proxy-appended (last) XFF hop, "
+        "never the client-supplied first hop"
+    )
+    monkeypatch.setattr(auth, "_TRUST_PROXY_HEADERS", False)
+    assert auth._get_client_id(FakeRequest()) == "10.0.0.1", (
+        "Outside production, XFF must be ignored entirely (spoofable)"
+    )
+
+
 def test_dev_key_rate_limited():
     """LOW finding: no throttling on repeated wrong-key attempts."""
     _request_log.clear()

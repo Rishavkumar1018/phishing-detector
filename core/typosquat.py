@@ -52,6 +52,36 @@ from core.wordplay import normalize_confusables, count_confusable_chars, GENERIC
 from core.features import COMMON_TLDS, _safe_urlparse
 
 
+# Protected cores that are ALSO common, legitimate subdomain labels on
+# unrelated real domains: product names deployed across many organizations
+# (outlook.live.com is Microsoft's own webmail; office.<company>.com and
+# zoom.<university>.edu are standard IT setups) and geographic prefixes
+# (usa.philips.com, usa.visa.com, usa.kaspersky.com are all real). Found
+# via confirmed live false positives: for these cores, an exact
+# prefix-label match alone is NOT the high-precision evidence the
+# subdomain-prefix check assumes for e.g. "paypal" or "irs" - so Check 1
+# additionally requires a corroborating signal (suspicious term in the
+# path/query or in another host label, or an unusual TLD) before flagging.
+# A real attack essentially always pairs the brand label with a lure word
+# or cheap TLD ("outlook.secure-signin.top"); a bare, clean host is far
+# more likely a legitimate product/regional subdomain.
+# (Cores shorter than 3 chars - "id" from id.me, "x" from x.com - are
+# excluded from ALL checks by the length guard in find_typosquat_match;
+# id.atlassian.com and x.<anything> were confirmed false positives too.)
+GENERIC_PREFIX_CORES = {"usa", "outlook", "office", "zoom"}
+
+
+def _other_host_labels_suspicious(host: str, matched_core: str) -> bool:
+    """True if any host label/sub-token OTHER than the matched brand label
+    is a generic suspicious term after confusable normalization - e.g.
+    'outlook.secure-signin.com' -> ['secure', 'signin'] both hit. Used as
+    corroboration for GENERIC_PREFIX_CORES, complementing
+    _has_corroborating_signal (which only looks at path/query + TLD and
+    misses lure words placed in the domain itself)."""
+    tokens = re.split(r"[.\-_]", normalize_confusables(host))
+    return any(t in GENERIC_SUSPICIOUS_TERMS for t in tokens if t and t != matched_core)
+
+
 def _damerau_levenshtein(a: str, b: str) -> int:
     """Like Levenshtein, but an adjacent-character transposition (e.g.
     'flipkart' -> 'filpkart', swapping 'li' to 'il') counts as ONE edit,
@@ -193,14 +223,26 @@ def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
         host_core, prefix_labels = match
         protected_core = protected.split(".")[0]
 
-        # --- Check 1: subdomain-prefix abuse (exact match only - high
-        # precision, catches "irs.mynewsblog.net" style impersonation) ---
-        if any(label == protected_core for label in prefix_labels):
-            return protected
-
-        # too short/generic to ever compare safely by ANY method (e.g. "co")
+        # too short/generic to ever compare safely by ANY method (e.g. "co",
+        # "id", "x"). Must come BEFORE Check 1: this guard used to sit after
+        # it, so any host with an ordinary "id." or "x." subdomain was
+        # flagged as impersonating id.me / x.com - confirmed live on
+        # id.atlassian.com (Atlassian's real login domain).
         if len(protected_core) < 3:
             continue
+
+        # --- Check 1: subdomain-prefix abuse (exact match only - high
+        # precision, catches "irs.mynewsblog.net" style impersonation).
+        # For cores that are also common legitimate subdomain labels
+        # (GENERIC_PREFIX_CORES above), a corroborating signal is required
+        # - otherwise outlook.live.com / usa.philips.com / zoom.<edu> get
+        # flagged just for existing. ---
+        if any(label == protected_core for label in prefix_labels):
+            if protected_core not in GENERIC_PREFIX_CORES:
+                return protected
+            if (_has_corroborating_signal(url, host)
+                    or _other_host_labels_suspicious(host, protected_core)):
+                return protected
 
         # --- Check 2: registrable-core typosquat (fuzzy, same rules as
         # before, now operating on the CORRECTLY size-matched core).

@@ -215,6 +215,13 @@ const GREETINGS = [
 document.getElementById('greeting').textContent =
   GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
+// The input isn't inside a <form>, so Enter did nothing - button-click
+// was the only way to submit. Standard expectation for a single-field
+// search-style UI.
+document.getElementById('urlInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') checkUrl();
+});
+
 // Escapes attacker-controlled text before it goes into innerHTML.
 // checked_url/note are user-controlled (checking
 // a suspicious URL IS the use case) and were interpolated raw into a
@@ -259,6 +266,23 @@ async function checkUrl() {
       body: JSON.stringify({url}),
       signal: thisController.signal,
     });
+    // Non-2xx (422 URL-too-long, 429 rate limit, 503 model missing) used
+    // to "work" only because data.verdict.toUpperCase() threw a TypeError
+    // that happened to land in the catch block. Handle it deliberately:
+    // show the server's own detail message when it's a plain string.
+    if (!res.ok) {
+      let msg = 'Error checking URL.';
+      try {
+        const err = await res.json();
+        if (typeof err.detail === 'string') msg = err.detail;
+      } catch {}
+      if (thisController !== currentController) return;
+      setGlow('blue');
+      document.getElementById('result').innerHTML =
+        `<span style="color:#f87171">${escapeHtml(msg)}</span>`;
+      return;
+    }
+
     const data = await res.json();
 
     // Guard: only render if this is still the most recent request.

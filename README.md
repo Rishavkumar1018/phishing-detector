@@ -2,13 +2,10 @@
 
 Rebuilt from a technical audit of a prior version, then hardened against
 an independent red-team security assessment and a 100,000-URL model
-evaluation (both non-destructive, both run via Claude Code). **Read
-`AUDIT_NOTES.md` first** — §3.16-3.18 cover the latest round: a HIGH
-event-loop-blocking DoS fix, CSV-injection fix, a real typosquat bug
-(`mail.*` subdomains flagged as Gmail impersonation) found and fixed, and
-a from-scratch augmentation-data overhaul after proof the old approach
-was memorizing training strings rather than generalizing. This README is
-just "how do I run it."
+evaluation (both non-destructive, both run via Claude Code). The full
+findings writeups live in private audit notes kept outside this repo;
+`PROJECT_UPGRADE_REPORT.md` (in this repo) documents the most recent
+audit-and-upgrade pass. This README is just "how do I run it."
 
 ## Bulk checking (developer-only)
 
@@ -98,10 +95,12 @@ pip install -r requirements-dev.txt
 python models/train.py
 ```
 
-Reads PhiUSIIL's raw URLs from `/mnt/user-data/uploads/`, extracts features
-via `core/features.py` (the single canonical implementation), augments the
-training split with real benign-with-path URLs (see AUDIT_NOTES.md §3.4),
-fits one bundled sklearn Pipeline, and writes a versioned artifact to
+Reads PhiUSIIL's raw URLs from `dataset/PhiUSIIL_Phishing_URL_Dataset.csv`
+(override the location with the `PHISHING_DETECTOR_DATASET` env var),
+extracts features via `core/features.py` (the single canonical
+implementation), augments the training split with real benign-with-path
+URLs (see `core/augmentation_data.py`'s module docstring), fits one
+bundled sklearn Pipeline, and writes a versioned artifact to
 `models/artifacts/` plus a `current.json` pointer.
 
 ## Serve
@@ -111,7 +110,9 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Visit `http://localhost:8000/`. `POST /api/check {"url": "..."}` returns
-`{checked_url, verdict, stage, confidence, model_version}`.
+`{checked_url, status, verdict, stage, confidence, model_version}` —
+`status` is `"ok"` or `"invalid"` (non-URL input; `verdict` is null and a
+user-facing `message` explains why).
 
 ## Test
 
@@ -138,11 +139,11 @@ core/wordplay_training_data.py   synthetic training data for the above
 core/auth.py             dev-key auth for bulk checking
 config/*.json            seed lists (replace with live feeds in prod)
 models/train.py          training script
-models/evaluate.py        realistic held-out evaluation (see AUDIT_NOTES.md)
+models/evaluate.py        realistic held-out evaluation (see its docstring)
 models/artifacts/        versioned model + metadata - committed to git
                           (Render needs these to serve without retraining;
                           check this folder before each commit and remove
-                          stale generations, see AUDIT_NOTES.md 3.24)
+                          stale generations)
 app/main.py               FastAPI serving layer + API
 app/static/                the actual HTML/CSS/JS the app serves
 extension/                 the browser extension (Manifest V3)
@@ -151,5 +152,6 @@ tests/                    regression + parity tests
 requirements.txt           runtime dependencies only
 requirements-dev.txt       adds test tooling for local development
 runtime.txt                pins the Python version
-AUDIT_NOTES.md            full findings writeup - read this (private, not in this public repo)
+render.yaml                Render deploy blueprint (build/start commands, env vars)
+PROJECT_UPGRADE_REPORT.md  changelog of the 2026-07 audit-and-upgrade pass
 ```

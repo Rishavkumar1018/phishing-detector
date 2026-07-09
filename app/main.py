@@ -122,6 +122,10 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB - well past any real URL-list file
 # here, this fix only removes the duplication.
 DECISION_THRESHOLD = 0.5
 
+# One message for both the single-check and bulk paths - same "two paths
+# must never diverge" rule as DECISION_THRESHOLD above.
+INVALID_URL_MESSAGE = "This doesn't look like a valid URL. Please enter a full website address."
+
 
 class CheckRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=MAX_URL_LENGTH)
@@ -211,7 +215,7 @@ def check_url(payload: CheckRequest):
         return CheckResponse(
             checked_url=url,
             status="invalid",
-            message="This doesn't look like a valid URL. Please enter a full website address.",
+            message=INVALID_URL_MESSAGE,
         )
 
     early = _decide_stage1(url)
@@ -250,6 +254,15 @@ def _bulk_check(urls: list[str]) -> BulkCheckResponse:
     fallthrough_indices = []
     fallthrough_urls = []
     for i, url in enumerate(urls):
+        # Same pre-filter as /api/check: this path used to skip validation
+        # entirely, so a stray non-URL line in an uploaded file ("URL LIST",
+        # a CSV fragment, random text) got fed to the model and came back
+        # with a confident safe/unsafe verdict - the exact single-vs-bulk
+        # drift _decide_stage1 exists to prevent.
+        if not is_valid_url(url):
+            results.append(CheckResponse(checked_url=url, status="invalid",
+                                          message=INVALID_URL_MESSAGE))
+            continue
         early = _decide_stage1(url)
         results.append(early)
         if early is None:
@@ -280,6 +293,7 @@ def _bulk_check(urls: list[str]) -> BulkCheckResponse:
         "total": len(final_results),
         "safe": sum(1 for r in final_results if r.verdict == "safe"),
         "unsafe": sum(1 for r in final_results if r.verdict == "unsafe"),
+        "invalid": sum(1 for r in final_results if r.status == "invalid"),
         "by_stage": {
             stage: sum(1 for r in final_results if r.stage == stage)
             for stage in ("blocklist", "allowlist", "typosquat", "model")
@@ -365,10 +379,10 @@ def bulk_check_file(file: UploadFile = File(...)):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["checked_url", "verdict", "stage", "confidence", "model_version", "note"])
+    writer.writerow(["checked_url", "verdict", "stage", "status", "confidence", "model_version", "note"])
     for r in bulk_result.results:
         writer.writerow([_csv_safe(r.checked_url), _csv_safe(r.verdict), _csv_safe(r.stage),
-                          r.confidence, _csv_safe(r.model_version), _csv_safe(r.note)])
+                          _csv_safe(r.status), r.confidence, _csv_safe(r.model_version), _csv_safe(r.note)])
     output.seek(0)
 
     headers = {"Content-Disposition": "attachment; filename=bulk_check_results.csv"}

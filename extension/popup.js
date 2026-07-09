@@ -27,6 +27,19 @@ function renderStatus(result) {
     area.innerHTML = `<span class="badge unknown">Not yet checked</span>`;
     return;
   }
+  // Backend can answer status="invalid" with verdict=null (e.g. a host
+  // with no dot, like an intranet name or localhost). This used to fall
+  // through to result.verdict.toUpperCase() -> TypeError: the popup died
+  // mid-render with a red border and a stale badge. Render it as its own
+  // neutral state instead.
+  if (result.status === "invalid" || !result.verdict) {
+    document.body.className = "state-neutral";
+    area.innerHTML = `
+      <span class="badge unknown">Can't check</span>
+      <div class="helper-text">${escapeHtml(result.message || "This address can't be assessed.")}</div>
+    `;
+    return;
+  }
   const isSafe = result.verdict === "safe";
   const cls = isSafe ? "safe" : "unsafe";
   document.body.className = isSafe ? "state-safe" : "state-unsafe";

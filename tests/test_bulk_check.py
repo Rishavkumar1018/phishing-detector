@@ -98,6 +98,49 @@ def test_bulk_check_file_requires_key():
     assert resp.status_code == 401
 
 
+def test_bulk_check_marks_non_urls_invalid_instead_of_scoring_them():
+    """2026-07-09 audit: the bulk path never called is_valid_url (the
+    single-check path has since commit 08ecdec), so a stray non-URL line
+    in an uploaded file got fed to the model and came back with a
+    confident safe/unsafe verdict - the exact single-vs-bulk drift
+    _decide_stage1's docstring promises can't happen."""
+    key = get_or_create_dev_key()
+    resp = client.post(
+        "/api/bulk-check",
+        json={"urls": ["https://www.google.com/", "definitely not a url"]},
+        headers={"X-Dev-Key": key},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    by_url = {r["checked_url"]: r for r in data["results"]}
+    bad = by_url["definitely not a url"]
+    assert bad["status"] == "invalid"
+    assert bad["verdict"] is None
+    assert data["summary"]["invalid"] == 1
+    assert by_url["https://www.google.com/"]["verdict"] == "safe"
+    # and the single path agrees - no drift in the other direction either
+    single = client.post("/api/check", json={"url": "definitely not a url"}).json()
+    assert single["status"] == "invalid"
+    assert single["verdict"] is None
+
+
+def test_bulk_check_file_reports_invalid_rows_in_csv():
+    """File-upload path: invalid rows appear in the exported CSV with an
+    empty verdict and status=invalid, instead of a made-up verdict."""
+    key = get_or_create_dev_key()
+    content = "https://www.google.com/\nnot-a-real-url-line\n".encode()
+    resp = client.post(
+        "/api/bulk-check-file",
+        headers={"X-Dev-Key": key},
+        files={"file": ("urls.txt", io.BytesIO(content), "text/plain")},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    assert "status" in body.splitlines()[0]
+    invalid_line = next(l for l in body.splitlines() if "not-a-real-url-line" in l)
+    assert "invalid" in invalid_line
+
+
 def test_bulk_check_rejects_over_limit():
     key = get_or_create_dev_key()
     from app.main import MAX_BULK_URLS

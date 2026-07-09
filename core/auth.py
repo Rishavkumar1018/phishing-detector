@@ -38,7 +38,7 @@ ENV_VAR_NAME = "PHISHING_DETECTOR_DEV_KEY"
 # (b) On Render (the documented deployment target) the app sits behind a
 #     proxy, so request.client.host was the PROXY's IP - every real client
 #     shared one bucket, and an attacker could lock the real developer out.
-#     Now reads X-Forwarded-For's first hop when APP_ENV=production (the
+#     Now reads X-Forwarded-For's last hop when APP_ENV=production (the
 #     same flag already used to gate /docs - Render is always behind a
 #     proxy, so bundling this under one existing flag avoids requiring a
 #     second env var). NOT trusted by default, since blindly trusting
@@ -60,7 +60,14 @@ def _get_client_id(request: Request) -> str:
     if _TRUST_PROXY_HEADERS:
         xff = request.headers.get("x-forwarded-for")
         if xff:
-            return xff.split(",")[0].strip()
+            # LAST entry, not first: the platform proxy (Render) APPENDS
+            # the IP it actually saw, while everything to the left is
+            # whatever the client claims. Taking the first entry let a
+            # client send "X-Forwarded-For: <anything>" to pick its own
+            # rate-limit bucket - rotating fake IPs to bypass the limit,
+            # or spoofing the real developer's IP to lock them out (the
+            # exact attack scenario (b) above is meant to prevent).
+            return xff.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 

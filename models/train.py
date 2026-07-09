@@ -224,13 +224,15 @@ def main():
         ],
     }
     meta_path = MODEL_DIR / f"model_{version}.metadata.json"
-    with open(meta_path, "w") as f:
+    # encoding= matters on Windows (default is cp1252) - same fix as the
+    # explicit-UTF-8 pass everywhere else; these two writes were missed.
+    with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
     # "current" pointer - the ONLY thing app.py reads. Never a bare relative
     # filename; always resolved from this file's own absolute path.
     current_path = MODEL_DIR / "current.json"
-    with open(current_path, "w") as f:
+    with open(current_path, "w", encoding="utf-8") as f:
         json.dump({"version": version, "preprocessor_file": preprocessor_path.name,
                     "xgb_model_file": xgb_path.name,
                     "metadata_file": meta_path.name}, f, indent=2)
