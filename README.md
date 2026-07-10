@@ -7,28 +7,37 @@ findings writeups live in private audit notes kept outside this repo;
 `PROJECT_UPGRADE_REPORT.md` (in this repo) documents the most recent
 audit-and-upgrade pass. This README is just "how do I run it."
 
-## Bulk checking (developer-only)
+## Bulk checking (public, no auth)
 
-Visit `http://localhost:8000/dev/bulk`. On first use, check your terminal
-output for a line like:
+From the homepage, click the **+** next to the search bar for two ways to
+check multiple URLs at once — no login or key required:
 
-```
-[phishing_detector] Dev key: aB3xY...
-```
+- **Bulk paste**: paste URLs (one per line, or comma-separated) into the
+  textarea and click Check. Capped at 50 URLs per request; results show
+  directly on the page as a table.
+- **Upload file**: upload a `.txt` or `.csv` file (under 2MB). URLs are
+  extracted from anywhere in the file's content — not assumed to be in
+  any particular column — deduplicated, and capped at 75 per file. The
+  file is read straight from the upload stream into memory and never
+  written to disk; nothing about it persists after the response is sent.
+  Once results are ready, download them as CSV or Excel (`.xlsx`),
+  generated in memory on demand.
 
-(This is auto-generated on first run and saved to `config/dev_key.txt`,
-which is gitignored — never committed, never hardcoded.) Paste that key
-into the page's "Dev key" field, then either upload a `.txt` (one URL per
-line) or `.csv` (with a `url` column) file, or paste URLs directly. Results
-download as a CSV. Capped at 5000 URLs per request; batched internally so
-even a few thousand URLs check in well under a second.
+Both flows reuse the exact same detection pipeline as the single-URL
+checker (`POST /api/check`) — see `app/main.py`'s `_bulk_check()` — so
+results never drift between single and bulk checks. The underlying
+endpoints (`POST /api/bulk-check-paste`, `POST /api/bulk-check-upload`,
+`POST /api/bulk-check-export`) are scriptable directly too:
 
-The same endpoints are scriptable directly:
 ```bash
-curl -X POST http://localhost:8000/api/bulk-check \
-  -H "X-Dev-Key: <your key>" -H "Content-Type: application/json" \
-  -d '{"urls": ["https://example.com/", "https://sbl.co.in/"]}'
+curl -X POST http://localhost:8000/api/bulk-check-paste \
+  -H "Content-Type: application/json" \
+  -d '{"text": "https://example.com/\nhttps://sbl.co.in/"}'
 ```
+
+`POST /api/admin/reload` remains developer-only, gated by the same
+auto-generated `X-Dev-Key` (see `config/dev_key.txt`, gitignored) as
+before — it hot-swaps the model/lists after a retrain without a restart.
 
 ## Browser extension (auto-checks every site you visit)
 
@@ -58,10 +67,10 @@ Render's free tier:
    - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
 4. **(Optional) Set an environment variable** `PHISHING_DETECTOR_DEV_KEY` to
-   a password of your choice, so bulk-checking works on the deployed
+   a password of your choice, so `/api/admin/reload` works on the deployed
    version with a key you control (otherwise one gets auto-generated per
    deploy and printed in Render's logs, which is less convenient to find
-   repeatedly).
+   repeatedly). Bulk checking itself is public and needs no key.
 
 5. **Deploy.** Render gives you a URL like `https://phishing-detector-xyz.onrender.com`.
    Free tier spins down after ~15 min idle — the first request after that
@@ -136,7 +145,7 @@ core/lists.py            allowlist/blocklist, config-driven
 core/typosquat.py        brand-similarity detection (e.g. sbl.co.in vs sbi.co.in)
 core/wordplay.py          general character-substitution/homoglyph detection
 core/wordplay_training_data.py   synthetic training data for the above
-core/auth.py             dev-key auth for bulk checking
+core/auth.py             dev-key auth for /api/admin/reload (bulk checking is public)
 config/*.json            seed lists (replace with live feeds in prod)
 models/train.py          training script
 models/evaluate.py        realistic held-out evaluation (see its docstring)

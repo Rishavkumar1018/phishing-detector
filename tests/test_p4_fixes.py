@@ -71,24 +71,20 @@ def test_ci_workflow_exists_and_runs_pytest():
 def test_html_extracted_from_python_strings():
     """5.7: ~250 lines of HTML/JS were embedded as Python triple-quoted
     strings in app/main.py - not editable, lintable, or
-    syntax-highlighted as HTML/JS. Moved to real static files."""
+    syntax-highlighted as HTML/JS. Moved to a real static file."""
     root = Path(__file__).resolve().parents[1]
     static_dir = root / "app" / "static"
     assert (static_dir / "index.html").exists()
-    assert (static_dir / "bulk.html").exists()
 
     main_py = (root / "app" / "main.py").read_text(encoding="utf-8")
     assert "_INDEX_HTML" not in main_py, "Embedded HTML string still present in main.py"
-    assert "_BULK_HTML" not in main_py, "Embedded HTML string still present in main.py"
 
-    # and the app must actually still serve them correctly
+    # and the app must actually still serve it correctly
     from fastapi.testclient import TestClient
     from app.main import app
     client = TestClient(app)
     r1 = client.get("/")
     assert r1.status_code == 200 and "<title>" in r1.text
-    r2 = client.get("/dev/bulk")
-    assert r2.status_code == 200 and "escapeHtml" in r2.text
 
 
 def test_logging_emits_domain_and_verdict_never_full_url(caplog):

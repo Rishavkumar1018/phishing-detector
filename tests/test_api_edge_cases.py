@@ -6,7 +6,7 @@ coverage beyond what the earlier per-fix regression files pin down -
 input-boundary behavior (length caps, empty/whitespace, exotic-but-legal
 characters), malformed requests, and request-shape abuse. Complements:
   test_malformed_urls.py   (unparseable URLs must not 500)
-  test_bulk_check.py       (bulk paths, auth, invalid rows)
+  test_bulk_check.py       (public bulk-paste/upload/export paths, invalid rows)
   test_security_fixes.py   (DoS caps, CSV injection, rate limiting)
   test_p2_fixes.py         (model-missing -> 503, not 500)
 """
@@ -18,7 +18,6 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app, MAX_URL_LENGTH
-from core.auth import get_or_create_dev_key
 
 client = TestClient(app)
 
@@ -76,6 +75,20 @@ def test_bare_domain_without_scheme_is_checked():
     data = resp.json()
     assert data["verdict"] == "safe"
     assert data["stage"] == "allowlist"
+    assert data["reason"] is None  # no reason for a safe verdict
+
+
+def test_unsafe_check_includes_a_plain_language_reason():
+    """reason is a non-technical 'why' shown next to unsafe verdicts -
+    see app/main.py's _unsafe_reason(). Must be present for every stage
+    that can produce 'unsafe' (blocklist, typosquat, model)."""
+    resp = client.post("/api/check", json={"url": "https://www.sbl.co.in/"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["verdict"] == "unsafe"
+    assert data["stage"] == "typosquat"
+    assert data["reason"], "Unsafe verdict must include a plain-language reason"
+    assert "confidence" not in data["reason"].lower()
 
 
 @pytest.mark.parametrize("text", [
@@ -142,29 +155,90 @@ def test_url_must_be_a_string_not_a_number():
     assert resp.status_code == 422
 
 
-def test_bulk_check_empty_url_list_rejected():
-    key = get_or_create_dev_key()
-    resp = client.post("/api/bulk-check", json={"urls": []},
-                        headers={"X-Dev-Key": key})
+def test_bulk_check_paste_empty_text_rejected():
+    resp = client.post("/api/bulk-check-paste", json={"text": ""})
     assert resp.status_code == 422  # pydantic min_length=1
 
 
-def test_bulk_check_file_empty_upload_rejected():
-    key = get_or_create_dev_key()
+def test_bulk_check_upload_empty_file_rejected():
     resp = client.post(
-        "/api/bulk-check-file", headers={"X-Dev-Key": key},
+        "/api/bulk-check-upload",
         files={"file": ("empty.txt", io.BytesIO(b""), "text/plain")},
     )
     assert resp.status_code == 400
 
 
-def test_bulk_check_file_whitespace_only_upload_rejected():
-    key = get_or_create_dev_key()
+def test_bulk_check_upload_whitespace_only_file_rejected():
     resp = client.post(
-        "/api/bulk-check-file", headers={"X-Dev-Key": key},
+        "/api/bulk-check-upload",
         files={"file": ("blank.txt", io.BytesIO(b"\n\n   \n"), "text/plain")},
     )
     assert resp.status_code == 400
+
+
+# ---------------------------------------- bulk endpoints: malformed input --
+# Phase 3 (2026-07 audit): the single-check endpoint already had malformed-
+# request coverage above; the newer public bulk endpoints (added this same
+# audit cycle) didn't. Probed manually first to confirm behavior, then
+# pinned here - every case already degrades to a clean 4xx with pydantic's
+# own descriptive-but-safe error, never a 500 or a leaked stack trace.
+def test_bulk_paste_wrong_type_rejected():
+    resp = client.post("/api/bulk-check-paste", json={"text": 12345})
+    assert resp.status_code == 422
+
+
+def test_bulk_export_bad_format_value_rejected():
+    resp = client.post(
+        "/api/bulk-check-export",
+        json={"results": [{"checked_url": "https://x.com/"}], "format": "pdf"},
+    )
+    assert resp.status_code == 422
+
+
+def test_bulk_export_results_wrong_type_rejected():
+    resp = client.post("/api/bulk-check-export", json={"results": "notalist"})
+    assert resp.status_code == 422
+
+
+def test_bulk_export_result_field_wrong_type_rejected():
+    resp = client.post(
+        "/api/bulk-check-export",
+        json={"results": [{"checked_url": "https://x.com/", "confidence": "not_a_number"}]},
+    )
+    assert resp.status_code == 422
+
+
+def test_bulk_upload_missing_file_field_rejected():
+    resp = client.post("/api/bulk-check-upload", data={})
+    assert resp.status_code == 422
+
+
+def test_bulk_upload_uppercase_extension_accepted():
+    """filename.lower() in bulk_check_upload must normalize the extension
+    check - a file literally named URLS.TXT is not a different format."""
+    resp = client.post(
+        "/api/bulk-check-upload",
+        files={"file": ("URLS.TXT", io.BytesIO(b"https://www.google.com/"), "text/plain")},
+    )
+    assert resp.status_code == 200
+
+
+def test_bulk_upload_binary_garbage_does_not_500():
+    """Non-text binary content must degrade to the normal 'no URLs found'
+    400, never crash the decode/parse step."""
+    resp = client.post(
+        "/api/bulk-check-upload",
+        files={"file": ("garbage.txt", io.BytesIO(b"\x00\x01\x02binary\xff\xfe"), "text/plain")},
+    )
+    assert resp.status_code == 400
+
+
+def test_bulk_paste_malformed_json_body_rejected():
+    resp = client.post(
+        "/api/bulk-check-paste", content=b"{not json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 422
 
 
 # -------------------------------------------------------------- health --

@@ -123,7 +123,7 @@ def _levenshtein_no_transposition(a: str, b: str) -> int:
     only the latter needs a corroborating keyword/TLD before flagging."""
     if a == b:
         return 0
-    len_a, len_b = len(a), len(b)
+    len_b = len(b)
     prev = list(range(len_b + 1))
     for i, ca in enumerate(a, 1):
         curr = [i] + [0] * len_b

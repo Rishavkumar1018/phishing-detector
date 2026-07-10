@@ -16,7 +16,6 @@ structure - the TECHNIQUE generalizes, without needing a huge reference
 set that would itself become a source of noise.
 """
 from __future__ import annotations
-import unicodedata
 
 # Leetspeak-style substitutions: character -> canonical letter it's
 # standing in for. Deliberately conservative (only the extremely common

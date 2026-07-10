@@ -13,7 +13,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import json
-import subprocess
 from fastapi.testclient import TestClient
 from app.main import app
 from core.auth import get_or_create_dev_key, _request_log
@@ -45,14 +44,15 @@ def test_rate_limiter_purges_stale_client_entries():
 
 def test_rate_limiter_only_counts_failed_attempts():
     """Review 2.3(c): counting successful requests too means a legitimate
-    bulk-scripting session hits 429 after 20 calls/min even with a
-    correct key every time. Only failed auth attempts should count."""
+    scripting session hits 429 after 20 calls/min even with a correct key
+    every time. Only failed auth attempts should count. Exercised against
+    /api/admin/reload - the one remaining dev-key-gated endpoint now that
+    bulk-check is public - rather than the old dev-only bulk endpoints."""
     _request_log.clear()
     key = get_or_create_dev_key()
     statuses = []
     for _ in range(30):  # more than RATE_LIMIT_MAX_REQUESTS, all with the CORRECT key
-        resp = client.post("/api/bulk-check", json={"urls": ["https://example.com/"]},
-                            headers={"X-Dev-Key": key})
+        resp = client.post("/api/admin/reload", headers={"X-Dev-Key": key})
         statuses.append(resp.status_code)
     assert 429 not in statuses, "Legitimate correctly-keyed requests should never be rate-limited"
     _request_log.clear()

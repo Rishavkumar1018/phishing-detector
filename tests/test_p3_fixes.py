@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import json
 import time
 
 
@@ -28,9 +27,7 @@ def test_list_matching_correctness_matches_old_linear_semantics():
     to the old (correct but slow) linear scan for every case that
     mattered - exact match, subdomain match, and the dot-boundary
     exclusion (evil-wikipedia.org must NOT match wikipedia.org)."""
-    from core.lists import is_allowlisted, _host_matches_entry
-
-    from core.lists import _load, _normalize_host
+    from core.lists import is_allowlisted, _host_matches_entry, _load
     domain_set = _load("allowlist")["_domain_set"]
 
     test_hosts = [
@@ -50,7 +47,7 @@ def test_list_matching_scales_independent_of_list_size():
     million-iteration check per URL. The fix must be near-constant-time
     regardless of list size - verified by building a large synthetic
     list and confirming lookup time doesn't scale with it."""
-    from core.lists import _host_suffixes, _matches_any
+    from core.lists import _matches_any
 
     small_set = {f"legit-domain-{i}.com" for i in range(100)}
     large_set = {f"legit-domain-{i}.com" for i in range(200_000)}

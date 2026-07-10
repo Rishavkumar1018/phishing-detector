@@ -180,6 +180,14 @@ function redirectToWarning(tabId, blockedUrl, result) {
     stage: result.stage || "",
     confidence: result.confidence != null ? result.confidence : "",
     note: result.note || "",
+    // 2026-07 audit fix: this was already being built and passed through
+    // to warning.html, but warning.js never read note/stage/confidence
+    // and warning.html had no element to show them - the block page only
+    // ever displayed a generic hardcoded sentence, so a user never saw
+    // WHY a site was flagged. `reason` (backend's plain-language "why",
+    // set for every unsafe stage - see app/main.py's _unsafe_reason) is
+    // now read and rendered by warning.js/warning.html.
+    reason: result.reason || "",
   });
   const warningUrl = chrome.runtime.getURL(`warning.html?${params.toString()}`);
   chrome.tabs.update(tabId, { url: warningUrl });

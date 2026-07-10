@@ -1,10 +1,13 @@
 """
 core/auth.py
 ============
-Gates developer-only features (bulk checking) behind a secret key, so this
-isn't accidentally exposed to anyone who finds the URL. The key is
-auto-generated on first run and stored in config/dev_key.txt, which is
-gitignored - nothing to accidentally commit or hardcode.
+Gates developer-only features behind a secret key, so this isn't
+accidentally exposed to anyone who finds the URL. Currently that's just
+/api/admin/reload (hot-swap the model/lists after a retrain) - bulk
+checking used to live behind this too, but is now a public feature (see
+app/main.py's bulk-check-paste/upload/export). The key is auto-generated
+on first run and stored in config/dev_key.txt, which is gitignored -
+nothing to accidentally commit or hardcode.
 
 This is intentionally simple (a single shared secret, not per-user
 accounts) because the stated requirement is "only me/developers," not
@@ -110,9 +113,9 @@ def get_or_create_dev_key() -> str:
     KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
     KEY_PATH.write_text(key, encoding="utf-8")
     print(f"\n[phishing_detector] Generated new dev key at {KEY_PATH}")
-    print(f"[phishing_detector] Read the key from that file, or run:")
-    print(f"[phishing_detector]   python -c \"from core.auth import get_or_create_dev_key; print(get_or_create_dev_key())\"")
-    print("[phishing_detector] Use it in the X-Dev-Key header for /api/bulk-check")
+    print("[phishing_detector] Read the key from that file, or run:")
+    print("[phishing_detector]   python -c \"from core.auth import get_or_create_dev_key; print(get_or_create_dev_key())\"")
+    print("[phishing_detector] Use it in the X-Dev-Key header for /api/admin/reload")
     print("[phishing_detector] (Not printed here directly - on hosts like Render, stdout")
     print("[phishing_detector]  goes into persistent platform logs.)\n")
     return key

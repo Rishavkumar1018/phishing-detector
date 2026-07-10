@@ -3,7 +3,7 @@ tests/test_malformed_urls.py
 =============================
 Regression tests for the P0 tier: malformed URLs raised an
 unhandled ValueError from urlparse/parsed.port, causing HTTP 500 on
-/api/check and — worse — failing an ENTIRE /api/bulk-check batch if one
+/api/check and — worse — failing an ENTIRE bulk-check batch if one
 row was malformed.
 
 The four reproduction inputs are taken verbatim from the review.
@@ -49,15 +49,12 @@ def test_api_check_does_not_500(url):
 
 def test_bulk_check_one_malformed_url_does_not_fail_whole_batch():
     """A single malformed URL in a batch must not fail all the others."""
-    from core.auth import get_or_create_dev_key
-    key = get_or_create_dev_key()
     urls = [
         "https://www.google.com/",
         "http://example.com:99999/",   # malformed, in the middle
         "https://www.wikipedia.org/",
     ]
-    resp = client.post("/api/bulk-check", json={"urls": urls},
-                        headers={"X-Dev-Key": key})
+    resp = client.post("/api/bulk-check-paste", json={"text": "\n".join(urls)})
     assert resp.status_code == 200, f"{resp.status_code}: {resp.text}"
     data = resp.json()
     assert data["summary"]["total"] == 3

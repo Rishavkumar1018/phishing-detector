@@ -43,9 +43,17 @@ function renderStatus(result) {
   const isSafe = result.verdict === "safe";
   const cls = isSafe ? "safe" : "unsafe";
   document.body.className = isSafe ? "state-safe" : "state-unsafe";
+  // 2026-07 audit fix: this only ever rendered result.note, which is
+  // ONLY set for the typosquat stage - a blocklist or model-flagged
+  // unsafe result showed just "UNSAFE" with no explanation at all.
+  // result.reason is the backend's plain-language "why", set for every
+  // unsafe stage (see app/main.py's _unsafe_reason) - prefer it, falling
+  // back to note for defense-in-depth against an older/misconfigured
+  // backend that predates the reason field.
+  const explanation = result.reason || result.note;
   area.innerHTML = `
     <span class="badge ${cls}">${result.verdict.toUpperCase()}</span>
-    ${result.note ? `<div class="note">${escapeHtml(result.note)}</div>` : ""}
+    ${explanation ? `<div class="note">${escapeHtml(explanation)}</div>` : ""}
   `;
 }
 

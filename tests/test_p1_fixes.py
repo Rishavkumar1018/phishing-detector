@@ -114,20 +114,19 @@ def test_background_js_strips_query_string_before_sending():
 def test_no_raw_unescaped_interpolation_in_served_html():
     """checked_url/note (attacker-controlled text -
     literally the use case, checking suspicious URLs) were interpolated
-    raw into innerHTML via template literals, in both the dev bulk page
-    and the public index page. An escape helper must be defined and used
-    for every field derived from the check response.
+    raw into innerHTML via template literals. An escape helper must be
+    defined and used for every field derived from the check response.
 
-    Checks app/static/index.html and app/static/bulk.html directly - this
-    HTML used to be embedded as Python strings in app/main.py, moved out
-    to real static files (project review 5.7: embedded HTML in Python
-    strings isn't editable/lintable/syntax-highlighted)."""
+    Checks app/static/index.html directly - this HTML used to be embedded
+    as Python strings in app/main.py, moved out to a real static file
+    (project review 5.7: embedded HTML in Python strings isn't
+    editable/lintable/syntax-highlighted). The public bulk-check UI (paste
+    and upload modals) lives in this same file, so it's covered here too."""
     static_dir = Path(__file__).resolve().parents[1].joinpath("app", "static")
     index_html = (static_dir / "index.html").read_text(encoding="utf-8")
-    bulk_html = (static_dir / "bulk.html").read_text(encoding="utf-8")
 
     import re
-    for name, html in [("index.html", index_html), ("bulk.html", bulk_html)]:
+    for name, html in [("index.html", index_html)]:
         assert "escapeHtml(" in html, f"No HTML-escaping helper found in {name}"
         for var in ["checked_url", "note"]:
             raw_pattern = re.compile(r"\$\{(?:data\.|r\.)" + var + r"\}")

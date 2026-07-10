@@ -17,26 +17,15 @@ def _read(relpath: str) -> str:
     return (ROOT / relpath).read_text(encoding="utf-8")
 
 
-def test_bulk_paste_splits_on_real_newlines():
-    """bulk.html split pasted input on the two-character literal
-    backslash-n ( .split('\\n') in the JS source), which never occurs in
-    textarea input - so ALL pasted URLs were concatenated and checked as
-    one giant 'URL'. The paste feature was completely broken. Must split
-    on a real newline regex (handling Windows CRLF too)."""
-    bulk = _read("app/static/bulk.html")
-    assert r"split('\n')" not in bulk, (
-        "bulk.html splits pasted URLs on a literal backslash-n again - "
-        "this breaks the paste feature entirely"
+def test_bulk_modal_renders_invalid_rows():
+    """The public bulk-check UI (app/static/index.html, replacing the old
+    dev-only bulk.html) must handle status='invalid' rows (verdict null)
+    without calling .toUpperCase() on null - same bug class as
+    test_popup_handles_invalid_status_without_crashing below."""
+    index = _read("app/static/index.html")
+    assert "r.status === 'invalid'" in index, (
+        "index.html's bulk results rendering has no handling for invalid rows"
     )
-    assert r"split(/\r?\n/)" in bulk, "expected newline-regex split not found"
-
-
-def test_bulk_page_renders_invalid_rows():
-    """Once /api/bulk-check can return status='invalid' rows (verdict
-    null), the results table must not call .toUpperCase() on null."""
-    bulk = _read("app/static/bulk.html")
-    assert "invalid" in bulk, "bulk.html has no handling for invalid rows"
-    assert "r.status === 'invalid'" in bulk
 
 
 def test_popup_handles_invalid_status_without_crashing():
@@ -65,6 +54,39 @@ def test_index_handles_http_error_responses_deliberately():
     happened to land in the catch block."""
     index = _read("app/static/index.html")
     assert "!res.ok" in index, "index.html never checks res.ok"
+
+
+def test_warning_page_shows_the_reason_it_was_blocked():
+    """2026-07 audit: background.js's redirectToWarning() built note/stage/
+    confidence into the warning page's URL params, but warning.js never
+    read them and warning.html had no element to show them - a user
+    blocked by the extension saw only a generic hardcoded sentence, never
+    the actual reason. Now `reason` (plain-language, set for every unsafe
+    stage) is built, read, and rendered."""
+    background = _read("extension/background.js")
+    assert "reason: result.reason" in background, (
+        "background.js's redirectToWarning() does not pass 'reason' to the warning page"
+    )
+    warning_js = _read("extension/warning.js")
+    assert 'params.get("reason")' in warning_js, (
+        "warning.js does not read the 'reason' query param"
+    )
+    warning_html = _read("extension/warning.html")
+    assert 'id="reasonBox"' in warning_html, (
+        "warning.html has no element to display the block reason"
+    )
+
+
+def test_popup_shows_reason_for_every_unsafe_stage():
+    """2026-07 audit: popup.js only ever rendered result.note, which is
+    set ONLY for the typosquat stage - a blocklist- or model-flagged
+    unsafe result showed no explanation at all. result.reason is set for
+    every unsafe stage (see app/main.py's _unsafe_reason)."""
+    popup = _read("extension/popup.js")
+    assert "result.reason" in popup, (
+        "popup.js does not reference result.reason - unsafe verdicts from "
+        "the blocklist/model stages would show no explanation"
+    )
 
 
 def test_options_page_validates_backend_url_before_saving():

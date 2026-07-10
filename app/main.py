@@ -30,17 +30,28 @@ every request is handled independently, and the response always echoes
 back exactly the URL IT checked. The frontend below uses AbortController
 so an in-flight stale request can never overwrite a newer one.
 
-Also exposes developer-only bulk checking (/dev/bulk page, /api/bulk-check
-and /api/bulk-check-file endpoints), gated by a secret key auto-generated
-in config/dev_key.txt (see core/auth.py) - not open to the public checker.
+Also exposes a PUBLIC bulk checker (no auth) via two endpoints:
+/api/bulk-check-paste (pasted text, one/comma-separated URLs, capped at
+MAX_PASTE_URLS) and /api/bulk-check-upload (.txt/.csv file, capped at
+MAX_FILE_URLS, read straight from the request stream - never written to
+disk). A third endpoint, /api/bulk-check-export, turns a set of results
+the browser already has into a downloadable CSV/XLSX built in memory.
+All three funnel through the same _bulk_check() used by /api/check, so
+there is exactly one phishing-detection code path in this file.
+
+The old developer-only /dev/bulk page and its X-Dev-Key-gated endpoints
+have been removed entirely - this public flow replaces it. core/auth.py's
+require_dev_key still gates /api/admin/reload, which is unrelated to bulk
+checking.
 """
 from __future__ import annotations
 import os
+import re
 import sys
 import io
 import csv
 import logging
-from typing import Annotated
+from typing import Literal
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,8 +105,9 @@ app = FastAPI(
 
 # Browser extensions call this API from a chrome-extension:// origin, which
 # is a real, distinct origin as far as CORS is concerned. Wide open here
-# (extension calls carry no cookies, and /api/check is meant to be public;
-# /api/bulk-check* is separately gated by X-Dev-Key regardless of origin).
+# (extension calls carry no cookies, and /api/check plus all the public
+# bulk-check* endpoints are meant to be public; /api/admin/reload is
+# separately gated by X-Dev-Key regardless of origin).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -103,9 +115,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MAX_BULK_URLS = 5000  # guard against an accidental multi-hour request
+MAX_BULK_URLS = 5000  # absolute internal ceiling _bulk_check will ever process in one call
 MAX_URL_LENGTH = 2048  # matches CheckRequest's existing cap
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB - well past any real URL-list file
+
+# Public bulk-checker limits. Deliberately far below MAX_BULK_URLS: the
+# host has 512MB total RAM shared with the OS and the already-loaded ML
+# model, so these caps (not MAX_BULK_URLS) are what actually bound memory
+# use for the public-facing endpoints.
+MAX_PASTE_URLS = 50
+MAX_FILE_URLS = 75
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MB, per the public upload widget's own stated limit
+MAX_PASTE_TEXT_CHARS = MAX_PASTE_URLS * (MAX_URL_LENGTH + 1)  # bounds the raw textarea payload itself
+
+# Deliberately regex-based, not a dependency like `urlextract`: RAM budget
+# above rules out adding weight for something a compiled pattern already
+# does well enough.
+#
+# SECURITY FIX (2026-07 audit): the previous version of this was ONE regex
+# combining tokenization and domain-shape validation, with a label pattern
+# shaped like `[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?` repeated inside
+# `(?:\....)+` and run via findall() across the WHOLE uploaded blob (up to
+# 2MB, unauthenticated). That nested-optional-inside-a-repeated-group shape
+# is a textbook catastrophic-backtracking pattern: measured directly,
+# 50,000 adversarial characters (long hyphen runs with no valid domain
+# ending) took 107 seconds to fail; extrapolating that growth to the 2MB
+# upload cap would hang the request for a plausibly multi-hour DoS - far
+# worse than the "one 19MB upload froze the server for 35s" incident this
+# project's own history already treats as critical, and reachable by
+# anyone (this endpoint has no auth).
+#
+# Also fixes a correctness bug found while rewriting this: the old pattern
+# required its repeated middle group to consume at least one ".label"
+# BEFORE the separately-mandatory trailing ".TLD" - which made a bare
+# two-label domain with no "www." (e.g. "google.com", "example.org")
+# impossible to match at all. Confirmed: _URL_EXTRACT_RE.findall("google.com")
+# returned [] before this fix. Verified after the fix that it now matches.
+#
+# The fix: split TOKENIZATION (a single flat character class, `[\s,;"'<>]+`
+# - one quantifier layer, cannot backtrack ambiguously regardless of input
+# size) from SHAPE VALIDATION (run only against each already-bounded token,
+# never the raw multi-megabyte blob). Each validation pattern also uses
+# only flat, non-nested quantifiers (`[a-zA-Z0-9-]+`, not the old
+# optional-wrapped-star form), which is the standard safe way to write a
+# domain-label regex. Verified empirically: 2,000,000 adversarial
+# characters (the full upload cap) now takes ~0.27s instead of hanging.
+_TOKEN_BOUNDARY_RE = re.compile(r"""[\s,;"'<>]+""")
+_SCHEME_URL_RE = re.compile(r"^(?:https?|ftp)://", re.IGNORECASE)
+_BARE_DOMAIN_RE = re.compile(
+    r"^(?:www\.)?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,}(?:[/?#].*)?$"
+)
+
+
+def _extract_urls(text: str) -> list[str]:
+    """URL-like substrings pulled out of free-form text (a CSV cell, a
+    sentence), deduplicated in first-seen order. Used by
+    bulk-check-upload, where content is arbitrary and non-URL text must
+    be ignored rather than surfaced as an 'Invalid' row. See the security
+    fix note above _TOKEN_BOUNDARY_RE for why this is two safe regexes
+    applied per-token, not one regex over the whole blob."""
+    seen: dict[str, None] = {}
+    for raw_token in _TOKEN_BOUNDARY_RE.split(text):
+        token = raw_token.strip(".,;:!?)")
+        if not token:
+            continue
+        if _SCHEME_URL_RE.match(token) or _BARE_DOMAIN_RE.match(token):
+            if token not in seen:
+                seen[token] = None
+    return list(seen.keys())
+
+
+def _split_paste_urls(text: str) -> list[str]:
+    """One-token-per-line-or-comma split, NOT extraction: every token the
+    user typed is kept (even ones that aren't URLs at all), so
+    _bulk_check's is_valid_url pre-filter can mark them 'Invalid' instead
+    of them silently disappearing - the behavior the bulk-paste spec
+    calls for ('erfgvrthtyjnn' -> Invalid, not dropped)."""
+    seen: dict[str, None] = {}
+    for token in re.split(r"[,\r\n]+", text):
+        token = token.strip()
+        if not token:
+            continue
+        if len(token) > MAX_URL_LENGTH:
+            token = token[:MAX_URL_LENGTH]
+        if token not in seen:
+            seen[token] = None
+    return list(seen.keys())
 
 # DECISION_THRESHOLD (the safe/unsafe cutoff) is imported from
 # core/registry.py - it used to be defined here, but models/evaluate.py
@@ -131,17 +225,19 @@ class CheckResponse(BaseModel):
     model_version: str | None = None
     note: str | None = None
     message: str | None = None   # user-facing explanation when status="invalid"
+    # Plain-language explanation, set ONLY when verdict="unsafe" - a
+    # non-technical user has no use for "unsafe" without a reason, but a
+    # reason next to "safe" reads as suspicious/unearned. See
+    # _unsafe_reason() below for the wording per stage.
+    reason: str | None = None
 
 
-class BulkCheckRequest(BaseModel):
-    # Per-item max_length closes a real gap found in security testing: the
-    # list-level max_length above only capped URL COUNT, not per-URL byte
-    # size - a single 500,000-character "URL" was accepted and processed,
-    # which is what made the event-loop-blocking DoS reachable through
-    # plain JSON, no file upload required.
-    urls: list[Annotated[str, Field(max_length=MAX_URL_LENGTH)]] = Field(
-        ..., min_length=1, max_length=MAX_BULK_URLS
-    )
+class BulkPasteRequest(BaseModel):
+    # Bounds the raw textarea payload itself (MAX_PASTE_TEXT_CHARS), not
+    # just the URL count after splitting - closes the same "one giant
+    # token" DoS shape that the old dev endpoint's per-item max_length was
+    # written to fix, just applied before splitting instead of after.
+    text: str = Field(..., min_length=1, max_length=MAX_PASTE_TEXT_CHARS)
 
 
 class BulkCheckResponse(BaseModel):
@@ -149,14 +245,40 @@ class BulkCheckResponse(BaseModel):
     summary: dict
 
 
+class BulkExportRequest(BaseModel):
+    # Re-packages results the browser already has (from a prior
+    # bulk-check-paste/upload response) into a downloadable file. Capped
+    # at the larger of the two public limits - this endpoint only ever
+    # receives what this app itself just returned, never third-party data.
+    results: list[CheckResponse] = Field(..., min_length=1, max_length=MAX_FILE_URLS)
+    format: Literal["csv", "xlsx"] = "csv"
+
+
+def _unsafe_reason(stage: str, typosquat_match: str | None = None) -> str:
+    """Plain-language, non-technical explanation for why a URL was marked
+    unsafe. Never called for a 'safe' verdict - see CheckResponse.reason."""
+    if stage == "blocklist":
+        return "This website is on a list of known unsafe or scam websites."
+    if stage == "typosquat":
+        return (
+            f"This web address looks a lot like '{typosquat_match}' but isn't it - "
+            "a common trick scam sites use to fool people."
+        )
+    # stage == "model": the ML model has no single human-readable "why" to
+    # give (it's a probability over many features, not a rule) - this is
+    # the honest, simple summary of what the model looks for.
+    return "This website's link has patterns that are often used by fake or scam websites."
+
+
 def _decide_stage1(url: str) -> CheckResponse | None:
     """Blocklist -> allowlist -> typosquat. Returns None if the URL falls
     through to the ML model (stage1 alone can't decide it). Shared by
-    both /api/check and /api/bulk-check so the two paths can never
-    silently diverge - the same lesson as core/features.py."""
+    every bulk-check path (paste, upload) and /api/check so they can
+    never silently diverge - the same lesson as core/features.py."""
     result: CheckResponse | None = None
     if is_blocklisted(url):
-        result = CheckResponse(checked_url=url, verdict="unsafe", stage="blocklist")
+        result = CheckResponse(checked_url=url, verdict="unsafe", stage="blocklist",
+                                reason=_unsafe_reason("blocklist"))
     elif is_allowlisted(url):
         result = CheckResponse(checked_url=url, verdict="safe", stage="allowlist")
     else:
@@ -165,6 +287,7 @@ def _decide_stage1(url: str) -> CheckResponse | None:
             result = CheckResponse(
                 checked_url=url, verdict="unsafe", stage="typosquat",
                 note=f"Domain closely resembles known site '{typosquat_match}' but does not match it exactly.",
+                reason=_unsafe_reason("typosquat", typosquat_match),
             )
     if result is not None:
         _log_verdict(url, result.verdict, result.stage)
@@ -230,6 +353,7 @@ def check_url(payload: CheckRequest):
         stage="model",
         confidence=proba_phishing,
         model_version=metadata["version"],
+        reason=_unsafe_reason("model") if verdict == "unsafe" else None,
     )
 
 
@@ -277,6 +401,7 @@ def _bulk_check(urls: list[str]) -> BulkCheckResponse:
                 stage="model",
                 confidence=p,
                 model_version=metadata["version"],
+                reason=_unsafe_reason("model") if verdict == "unsafe" else None,
             )
 
     final_results = [r for r in results if r is not None]
@@ -293,11 +418,23 @@ def _bulk_check(urls: list[str]) -> BulkCheckResponse:
     return BulkCheckResponse(results=final_results, summary=summary)
 
 
-@app.post("/api/bulk-check", response_model=BulkCheckResponse, dependencies=[Depends(require_dev_key)])
-def bulk_check_json(payload: BulkCheckRequest):
-    """Developer-only (X-Dev-Key header required, see core/auth.py). Takes
-    a JSON list of URLs directly - useful for scripting."""
-    return _bulk_check(payload.urls)
+@app.post("/api/bulk-check-paste", response_model=BulkCheckResponse)
+def bulk_check_paste(payload: BulkPasteRequest):
+    """Public, no auth. Splits pasted text on newlines and/or commas -
+    every token is kept (not just ones that look like URLs), so
+    non-URL text still comes back as an explicit 'Invalid' row via
+    _bulk_check's is_valid_url pre-filter, rather than silently vanishing.
+    Rejects the whole request up front if it's over MAX_PASTE_URLS -
+    never silently processes just the first N."""
+    urls = _split_paste_urls(payload.text)
+    if not urls:
+        raise HTTPException(status_code=400, detail="Please paste at least one URL.")
+    if len(urls) > MAX_PASTE_URLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Please check up to {MAX_PASTE_URLS} URLs at a time.",
+        )
+    return _bulk_check(urls)
 
 
 def _csv_safe(value) -> str:
@@ -306,80 +443,140 @@ def _csv_safe(value) -> str:
     apps to treat it as text rather than evaluate it. Closes a confirmed
     finding: an uploaded url column value like '=cmd|\' /C calc\'!A1'
     was written verbatim into the exported CSV and would execute as a
-    formula if opened in Excel/Sheets."""
+    formula if opened in Excel/Sheets. Applied to CSV and XLSX exports
+    alike - the same formula-trigger characters execute in both."""
     s = "" if value is None else str(value)
     if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + s
     return s
 
 
-@app.post("/api/bulk-check-file", dependencies=[Depends(require_dev_key)])
-def bulk_check_file(file: UploadFile = File(...)):
-    """Developer-only. Accepts a .txt (one URL per line) or .csv (a 'url'
-    column, or falls back to the first column) and returns a downloadable
-    CSV of results - the actual "upload your file of URLs" feature.
+_ALLOWED_UPLOAD_EXTENSIONS = (".txt", ".csv")
+
+
+@app.post("/api/bulk-check-upload", response_model=BulkCheckResponse)
+def bulk_check_upload(file: UploadFile = File(...)):
+    """Public, no auth. Accepts a .txt or .csv file, extracts URL-like
+    substrings from its content (regardless of column/position - see
+    _extract_urls), and runs them through the same pipeline as every
+    other check path.
+
+    Nothing about the upload is ever written to disk or kept past this
+    request: it's read directly from the request stream into `raw_bytes`,
+    decoded, parsed, and discarded once the function returns - no temp
+    file, no DB row, no server-side cache of file contents.
 
     Deliberately a plain `def`, not `async def`: this function does 100%
     synchronous CPU/IO work (parsing, feature extraction, prediction), and
-    a synchronous function in FastAPI runs in a threadpool automatically,
-    the same as bulk_check_json above already benefits from. The previous
-    `async def` version ran all of that directly on the single event-loop
-    thread - confirmed in security testing: one 19MB upload froze the
-    entire server, including the public /api/check endpoint, for 35
-    seconds."""
+    a synchronous function in FastAPI runs in a threadpool automatically.
+    An `async def` version would run all of that directly on the single
+    event-loop thread, blocking every other request (including
+    /api/check) for the duration - confirmed in this project's own
+    security testing history against the old dev-only upload endpoint."""
+    filename = (file.filename or "").lower()
+    if not filename.endswith(_ALLOWED_UPLOAD_EXTENSIONS):
+        raise HTTPException(status_code=400, detail="Only .txt and .csv files are supported.")
+
     content_length = file.size
     if content_length is not None and content_length > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large ({content_length} bytes); max is {MAX_UPLOAD_BYTES} bytes.",
+            detail=f"File too large; max is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
         )
 
     raw_bytes = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(raw_bytes) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large; max is {MAX_UPLOAD_BYTES} bytes.",
+            detail=f"File too large; max is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB.",
         )
-    raw = raw_bytes.decode("utf-8", errors="ignore")
-    urls: list[str] = []
 
-    if file.filename and file.filename.lower().endswith(".csv"):
-        reader = csv.reader(io.StringIO(raw))
-        rows = list(reader)
-        if not rows:
-            raise HTTPException(status_code=400, detail="Empty CSV file.")
-        header = [h.strip().lower() for h in rows[0]]
-        url_col = header.index("url") if "url" in header else 0
-        data_rows = rows[1:] if "url" in header else rows
-        urls = [r[url_col] for r in data_rows if len(r) > url_col and r[url_col].strip()]
-    else:
-        urls = [line for line in raw.splitlines() if line.strip()]
+    # Broad except, not just decode/csv.Error: this is public and
+    # unauthenticated, so any corrupt/adversarial upload must degrade to a
+    # clean 400, never a 500 with an internal stack trace in the response.
+    try:
+        raw = raw_bytes.decode("utf-8", errors="ignore")
+        if filename.endswith(".csv"):
+            rows = list(csv.reader(io.StringIO(raw)))
+            text_blob = "\n".join(cell for row in rows for cell in row)
+        else:
+            text_blob = raw
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not read this file. Please upload a plain .txt or .csv file.",
+        )
 
-    # Per-URL length cap, same reasoning as BulkCheckRequest above - this
-    # is what makes the file-upload path exploitable at the same severity
-    # as the JSON path was before that fix.
-    oversized = sum(1 for u in urls if len(u) > MAX_URL_LENGTH)
-    urls = [u[:MAX_URL_LENGTH] for u in urls]
-
+    urls = _extract_urls(text_blob)
     if not urls:
         raise HTTPException(status_code=400, detail="No URLs found in the uploaded file.")
-    if len(urls) > MAX_BULK_URLS:
-        raise HTTPException(status_code=400, detail=f"Too many URLs ({len(urls)}); max is {MAX_BULK_URLS} per file.")
+    if len(urls) > MAX_FILE_URLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This file contains too many URLs - please limit to {MAX_FILE_URLS} URLs per file.",
+        )
 
-    bulk_result = _bulk_check(urls)
+    return _bulk_check(urls)
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["checked_url", "verdict", "stage", "status", "confidence", "model_version", "note"])
-    for r in bulk_result.results:
-        writer.writerow([_csv_safe(r.checked_url), _csv_safe(r.verdict), _csv_safe(r.stage),
-                          _csv_safe(r.status), r.confidence, _csv_safe(r.model_version), _csv_safe(r.note)])
-    output.seek(0)
 
-    headers = {"Content-Disposition": "attachment; filename=bulk_check_results.csv"}
-    if oversized:
-        headers["X-Truncated-URLs"] = str(oversized)
-    return StreamingResponse(output, media_type="text/csv", headers=headers)
+def _status_label(r: CheckResponse) -> str:
+    if r.status == "invalid":
+        return "Invalid"
+    return "Safe" if r.verdict == "safe" else "Unsafe"
+
+
+def _percent_chance(r: CheckResponse) -> float | str:
+    """Chance (0-100) that the verdict shown is correct - e.g. a 'safe'
+    verdict from a 0.1 phishing-probability model score is a 90% chance
+    of being safe, not 10%. Mirrors the same calculation the single-check
+    UI already does client-side."""
+    if r.confidence is None:
+        return ""
+    pct = (1 - r.confidence) if r.verdict == "safe" else r.confidence
+    return round(pct * 100, 1)
+
+
+def _build_export(results: list[CheckResponse], fmt: str) -> tuple[io.BytesIO, str, str]:
+    """Builds the downloadable results file entirely in memory
+    (io.BytesIO, never a temp file on disk). The caller streams it and
+    lets it go out of scope immediately after - nothing here persists.
+    "Percent Chance" and "Reason", not "Confidence" - matches the on-screen
+    wording (non-technical users don't parse "confidence")."""
+    rows = [
+        {
+            "URL": _csv_safe(r.checked_url),
+            "Status": _status_label(r),
+            "Percent Chance": _percent_chance(r),
+            # Only unsafe rows get a reason - see CheckResponse.reason.
+            "Reason": _csv_safe(r.reason) if r.reason else "",
+        }
+        for r in results
+    ]
+    df = pd.DataFrame(rows, columns=["URL", "Status", "Percent Chance", "Reason"])
+
+    buf = io.BytesIO()
+    if fmt == "xlsx":
+        df.to_excel(buf, index=False, engine="openpyxl")
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = "bulk_check_results.xlsx"
+    else:
+        buf.write(df.to_csv(index=False).encode("utf-8"))
+        media_type = "text/csv"
+        filename = "bulk_check_results.csv"
+    buf.seek(0)
+    return buf, media_type, filename
+
+
+@app.post("/api/bulk-check-export")
+def bulk_check_export(payload: BulkExportRequest):
+    """Public, no auth. Turns results the browser already holds (returned
+    moments earlier by bulk-check-paste/bulk-check-upload) into a
+    downloadable CSV or XLSX. Does not re-run detection and does not
+    touch the original uploaded file in any way - by this point that file
+    was already discarded, per bulk_check_upload's docstring."""
+    buf, media_type, filename = _build_export(payload.results, payload.format)
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    return StreamingResponse(buf, media_type=media_type, headers=headers)
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -388,14 +585,5 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-
-
-@app.get("/dev/bulk", response_class=HTMLResponse)
-def dev_bulk_page():
-    """No @Depends(require_dev_key) here - the PAGE itself is just HTML/JS;
-    the key is entered in the browser and sent as a header on the actual
-    /api/bulk-check-file request, which IS protected. Serving the page
-    without a key is harmless; it does nothing without a valid key."""
-    return (STATIC_DIR / "bulk.html").read_text(encoding="utf-8")
 
 
