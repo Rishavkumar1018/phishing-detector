@@ -26,14 +26,33 @@ function goBack() {
   }
 }
 
-function proceedAnyway() {
-  chrome.runtime.sendMessage({ type: "PROCEED_ANYWAY", url: blockedUrl }, () => {
-    // background.js navigates the tab directly once it registers the
-    // temporary allow - nothing further to do here.
+// There is deliberately no path from this page to the flagged URL itself
+// - once a site is flagged unsafe, the only useful actions are going back
+// or (for a typosquat, where we know which real brand is being
+// impersonated) going to that brand's actual site. See app/main.py's
+// CheckResponse.legit_domain and core/typosquat.py's find_typosquat_match.
+//
+// legit_domain is only ever set by background.js from the backend's
+// response (see redirectToWarning), and background.js only ever sets it
+// from a typosquat-stage result, where find_typosquat_match() guarantees
+// it's a literal entry from config/allowlist.json - never text built out
+// of the flagged URL. Still, this page treats it as untrusted input (one
+// compromised/misconfigured backend away from something unexpected - same
+// posture as popup.js's escapeHtml comment) and validates it looks like a
+// plain hostname before ever using it in a navigation target.
+const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]{0,62}\.)+[a-z]{2,}$/i;
+const legitDomainParam = params.get("legit_domain") || "";
+const legitDomain = HOSTNAME_RE.test(legitDomainParam) ? legitDomainParam : "";
+
+const actionBtn = document.getElementById("actionBtn");
+if (legitDomain) {
+  actionBtn.textContent = `Go to ${legitDomain}`;
+  actionBtn.addEventListener("click", () => {
+    window.location.href = `https://${legitDomain}`;
   });
+} else {
+  actionBtn.textContent = "Close warning";
+  actionBtn.addEventListener("click", goBack);
 }
 
-// MV3 pages run under CSP script-src 'self', which blocks inline onclick
-// handlers. Wire the buttons up here instead .
 document.getElementById("backBtn").addEventListener("click", goBack);
-document.getElementById("proceedBtn").addEventListener("click", proceedAnyway);

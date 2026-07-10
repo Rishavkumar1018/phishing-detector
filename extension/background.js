@@ -21,7 +21,6 @@ const DEFAULT_SETTINGS = {
 };
 
 const CACHE_TTL_MS = 10 * 60 * 1000;      // 10 min: re-check a site periodically
-const TEMP_ALLOW_TTL_MS = 5 * 60 * 1000;  // 5 min: "proceed anyway" grace period
 const MAX_CACHE_ENTRIES = 500;            // see setCacheEntry below
 const IGNORED_SCHEMES = ["chrome:", "chrome-extension:", "about:", "edge:", "brave:", "file:"];
 
@@ -73,20 +72,6 @@ function isCacheFresh(entry) {
   return entry && Date.now() - entry.timestamp < CACHE_TTL_MS;
 }
 
-async function getTempAllow() {
-  const { tempAllow } = await chrome.storage.session.get("tempAllow");
-  return tempAllow || {};
-}
-async function addTempAllow(url) {
-  const allow = await getTempAllow();
-  allow[url] = Date.now();
-  await chrome.storage.session.set({ tempAllow: allow });
-}
-function isTempAllowed(allowMap, url) {
-  const ts = allowMap[url];
-  return ts && Date.now() - ts < TEMP_ALLOW_TTL_MS;
-}
-
 function stripForPrivacy(urlStr) {
   // every top-level navigation - full URL,
   // INCLUDING query strings (which routinely contain search terms,
@@ -129,15 +114,32 @@ async function checkUrlWithBackend(url, backendUrl) {
   return res.json();
 }
 
-function setBadge(tabId, verdict) {
+// chrome.action.* and chrome.tabs.* calls below are all keyed on a tabId
+// captured before an async backend round-trip (checkUrlWithBackend). By
+// the time that call resolves, the user may have already closed the tab
+// or navigated it elsewhere, making the tabId stale - both APIs reject
+// with "No tab with id: N" in that case (visible as an unhandled promise
+// rejection in chrome://extensions's Errors page). That's an expected
+// race, not a bug: there's nothing useful to do with a badge/redirect for
+// a tab that no longer exists, so swallow it here rather than let it
+// surface as a spurious error.
+async function safeTabCall(promise) {
+  try {
+    await promise;
+  } catch (err) {
+    if (!String(err && err.message).includes("No tab with id")) throw err;
+  }
+}
+
+async function setBadge(tabId, verdict) {
   if (verdict === "unsafe") {
-    chrome.action.setBadgeText({ tabId, text: "!" });
-    chrome.action.setBadgeBackgroundColor({ tabId, color: "#dc2626" });
+    await safeTabCall(chrome.action.setBadgeText({ tabId, text: "!" }));
+    await safeTabCall(chrome.action.setBadgeBackgroundColor({ tabId, color: "#dc2626" }));
   } else if (verdict === "safe") {
-    chrome.action.setBadgeText({ tabId, text: "" }); // clear - safe is the quiet default
+    await safeTabCall(chrome.action.setBadgeText({ tabId, text: "" })); // clear - safe is the quiet default
   } else {
-    chrome.action.setBadgeText({ tabId, text: "?" });
-    chrome.action.setBadgeBackgroundColor({ tabId, color: "#6b7280" });
+    await safeTabCall(chrome.action.setBadgeText({ tabId, text: "?" }));
+    await safeTabCall(chrome.action.setBadgeBackgroundColor({ tabId, color: "#6b7280" }));
   }
 }
 
@@ -148,9 +150,6 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
 
   const settings = await getSettings();
   if (!settings.autoCheckEnabled) return;
-
-  const tempAllow = await getTempAllow();
-  if (isTempAllowed(tempAllow, url)) return; // user already said "proceed anyway"
 
   const cache = await getCache();
   const cached = cache[url];
@@ -188,19 +187,20 @@ function redirectToWarning(tabId, blockedUrl, result) {
     // set for every unsafe stage - see app/main.py's _unsafe_reason) is
     // now read and rendered by warning.js/warning.html.
     reason: result.reason || "",
+    // Set whenever the backend could identify a real brand this URL
+    // resembles - from the typosquat stage directly, or as an advisory
+    // guess for blocklist/model-stage results (see app/main.py's
+    // CheckResponse.legit_domain and _advisory_legit_domain). Lets
+    // warning.js offer "go to the real site" instead of ever sending the
+    // user to the flagged URL itself - there is no button path that
+    // navigates to blockedUrl.
+    legit_domain: result.legit_domain || "",
   });
   const warningUrl = chrome.runtime.getURL(`warning.html?${params.toString()}`);
-  chrome.tabs.update(tabId, { url: warningUrl });
+  safeTabCall(chrome.tabs.update(tabId, { url: warningUrl }));
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "PROCEED_ANYWAY") {
-    addTempAllow(message.url).then(() => {
-      if (sender.tab) chrome.tabs.update(sender.tab.id, { url: message.url });
-      sendResponse({ ok: true });
-    });
-    return true; // async response
-  }
   if (message.type === "MANUAL_CHECK") {
     // Found via real user testing: this handler had no scheme filtering,
     // unlike onBeforeNavigate. A manual check triggered while a tab was

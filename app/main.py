@@ -230,6 +230,16 @@ class CheckResponse(BaseModel):
     # reason next to "safe" reads as suspicious/unearned. See
     # _unsafe_reason() below for the wording per stage.
     reason: str | None = None
+    # The real domain a typosquat is impersonating, set ONLY for
+    # stage="typosquat" - a bare copy of find_typosquat_match()'s return
+    # value, which is always a literal entry from config/allowlist.json,
+    # never a string built from the flagged URL itself. This is what lets
+    # the extension's warning page safely offer "go to the real site"
+    # instead of guessing a domain from string similarity: the redirect
+    # target is always a known-good allowlist entry, so even a fooled
+    # similarity match can only send the user to the WRONG real site, never
+    # an attacker-controlled one.
+    legit_domain: str | None = None
 
 
 class BulkPasteRequest(BaseModel):
@@ -270,6 +280,22 @@ def _unsafe_reason(stage: str, typosquat_match: str | None = None) -> str:
     return "This website's link has patterns that are often used by fake or scam websites."
 
 
+def _advisory_legit_domain(url: str) -> str | None:
+    """Best-effort 'what real site might this be impersonating', for
+    unsafe verdicts that DIDN'T come from the typosquat stage (blocklist,
+    model). Those stages already decided the URL is unsafe on their own
+    evidence, so this is purely advisory - it drives the warning page's
+    'go to the real site' suggestion, not the verdict - and can afford to
+    use find_typosquat_match's require_corroboration=False mode (matches
+    e.g. 'arnazon.com' against 'amazon.com' even with no suspicious path,
+    which the verdict-deciding typosquat stage deliberately withholds to
+    avoid flagging coincidental collisions like redfin.com/reddit.com).
+    Still only ever returns a literal config/allowlist.json entry - never
+    text built from the flagged URL - so it carries the same safety
+    property as the typosquat stage's own legit_domain."""
+    return find_typosquat_match(url, require_corroboration=False)
+
+
 def _decide_stage1(url: str) -> CheckResponse | None:
     """Blocklist -> allowlist -> typosquat. Returns None if the URL falls
     through to the ML model (stage1 alone can't decide it). Shared by
@@ -278,7 +304,8 @@ def _decide_stage1(url: str) -> CheckResponse | None:
     result: CheckResponse | None = None
     if is_blocklisted(url):
         result = CheckResponse(checked_url=url, verdict="unsafe", stage="blocklist",
-                                reason=_unsafe_reason("blocklist"))
+                                reason=_unsafe_reason("blocklist"),
+                                legit_domain=_advisory_legit_domain(url))
     elif is_allowlisted(url):
         result = CheckResponse(checked_url=url, verdict="safe", stage="allowlist")
     else:
@@ -288,6 +315,7 @@ def _decide_stage1(url: str) -> CheckResponse | None:
                 checked_url=url, verdict="unsafe", stage="typosquat",
                 note=f"Domain closely resembles known site '{typosquat_match}' but does not match it exactly.",
                 reason=_unsafe_reason("typosquat", typosquat_match),
+                legit_domain=typosquat_match,
             )
     if result is not None:
         _log_verdict(url, result.verdict, result.stage)
@@ -354,6 +382,7 @@ def check_url(payload: CheckRequest):
         confidence=proba_phishing,
         model_version=metadata["version"],
         reason=_unsafe_reason("model") if verdict == "unsafe" else None,
+        legit_domain=_advisory_legit_domain(url) if verdict == "unsafe" else None,
     )
 
 
@@ -402,6 +431,7 @@ def _bulk_check(urls: list[str]) -> BulkCheckResponse:
                 confidence=p,
                 model_version=metadata["version"],
                 reason=_unsafe_reason("model") if verdict == "unsafe" else None,
+                legit_domain=_advisory_legit_domain(url) if verdict == "unsafe" else None,
             )
 
     final_results = [r for r in results if r is not None]

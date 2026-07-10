@@ -190,12 +190,30 @@ def _has_corroborating_signal(url: str, host: str) -> bool:
     return has_keyword or has_unusual_tld
 
 
-def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
+def find_typosquat_match(url: str, max_distance: int = 2, require_corroboration: bool = True) -> str | None:
     """Returns the protected domain this URL suspiciously resembles, or
     None. Two independent checks, both against every protected domain:
     (1) registrable-core typosquat (near-miss of the actual domain), and
     (2) subdomain-prefix abuse (protected brand name used as a label
-    before the real registrable domain, e.g. 'irs.mynewsblog.net')."""
+    before the real registrable domain, e.g. 'irs.mynewsblog.net').
+
+    require_corroboration=True (default) is the verdict-deciding mode: a
+    distance-2, non-transposition near-miss (e.g. 'arnazon' vs 'amazon')
+    needs a suspicious path/query keyword or unusual TLD alongside it
+    before this counts as a match - see _has_corroborating_signal's
+    docstring for why (avoids flagging coincidental real-company
+    collisions like redfin/reddit). That gate exists to protect the
+    unsafe/safe VERDICT from false positives.
+
+    require_corroboration=False skips that gate for Check 2's fuzzy
+    branch only (Check 1's GENERIC_PREFIX_CORES gate and Check 4's
+    combosquat gate are unaffected - those protect against different,
+    still-live FP classes). Intended ONLY for suggesting a redirect target
+    on a URL some OTHER stage has already independently flagged unsafe
+    (see app/main.py's advisory legit_domain lookup) - at that point the
+    site is being blocked regardless, so a looser brand-resemblance check
+    just changes which real site gets suggested, never whether the user
+    is blocked."""
     host = _normalize_host(url)
     if not host:
         return None
@@ -263,6 +281,8 @@ def find_typosquat_match(url: str, max_distance: int = 2) -> str | None:
                 if distance == 1:
                     return protected  # distance-1 on a long core is unambiguous, no gate needed
                 if distance <= max_distance:
+                    if not require_corroboration:
+                        return protected
                     transposition_involved = (
                         _levenshtein_no_transposition(host_core, protected_core) > distance
                     )
