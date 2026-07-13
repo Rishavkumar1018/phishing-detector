@@ -1,166 +1,148 @@
-# Phishing URL Detector v2
+# LexSentinel — Phishing URL Detector
 
-Rebuilt from a technical audit of a prior version, then hardened against
-an independent red-team security assessment and a 100,000-URL model
-evaluation (both non-destructive, both run via Claude Code). The full
-findings writeups live in private audit notes kept outside this repo;
-`PROJECT_UPGRADE_REPORT.md` (in this repo) documents the most recent
-audit-and-upgrade pass. This README is just "how do I run it."
+A machine-learning-based phishing URL detection system, built as a final-year
+B.Tech project (Asansol Engineering College, MAKAUT). Full academic writeup:
+`final_year_thesis_report.pdf` (also available as `LexSentinel_Thesis_Report.docx`).
 
-## Bulk checking (public, no auth)
+## Summary
 
-From the homepage, click the **+** next to the search bar for two ways to
-check multiple URLs at once — no login or key required:
+LexSentinel classifies URLs as benign or phishing in real time, combining a
+trained gradient-boosted (XGBoost) classifier with rule-based signal layers —
+allowlists/blocklists, typosquat detection (e.g. catching `sbl.co.in`
+impersonating `sbi.co.in`), and general character-substitution/homoglyph
+("wordplay") detection. It ships as a FastAPI backend, a web UI for
+single and bulk URL checks, and a Manifest V3 Chrome extension that checks
+every site a user visits automatically before it loads.
 
-- **Bulk paste**: paste URLs (one per line, or comma-separated) into the
-  textarea and click Check. Capped at 50 URLs per request; results show
-  directly on the page as a table.
-- **Upload file**: upload a `.txt` or `.csv` file (under 2MB). URLs are
-  extracted from anywhere in the file's content — not assumed to be in
-  any particular column — deduplicated, and capped at 75 per file. The
-  file is read straight from the upload stream into memory and never
-  written to disk; nothing about it persists after the response is sent.
-  Once results are ready, download them as CSV or Excel (`.xlsx`),
-  generated in memory on demand.
+**Dataset & training**: models are trained on the PhiUSIIL Phishing URL
+Dataset, with additional benign-with-path URLs augmented in to counter
+false positives seen on real-world sites. Features are extracted from the
+URL string alone (lexical/structural features — no live page fetch needed
+at inference time), through a single canonical feature-extraction module
+shared identically between training and serving code, so the two can never
+drift apart.
 
-Both flows reuse the exact same detection pipeline as the single-URL
-checker (`POST /api/check`) — see `app/main.py`'s `_bulk_check()` — so
-results never drift between single and bulk checks. The underlying
-endpoints (`POST /api/bulk-check-paste`, `POST /api/bulk-check-upload`,
-`POST /api/bulk-check-export`) are scriptable directly too:
+**Model comparison**: the thesis benchmarks Logistic Regression, Random
+Forest, and XGBoost head-to-head on the same data; XGBoost was selected and
+shipped. Reported results: ~98.3% accuracy on the PhiUSIIL test split and
+~94% accuracy on a realistic, independently constructed held-out set (URLs
+disjoint from training/augmentation data). Feature-importance analysis
+shows `is_https` as the single most influential signal (~46% gain),
+flagged in the report as a limitation — reliance on HTTPS presence alone is
+not fully robust as attackers increasingly use valid TLS certificates too.
+
+**Engineering hardening**: beyond the initial model, the system went
+through a technical audit, an independent red-team security assessment,
+and a 100,000-URL evaluation pass — fixing issues like inconsistent bulk
+paste parsing, typosquat false positives on legitimate subdomains
+(`id.atlassian.com`, `outlook.live.com`), a rate-limiting bypass via
+spoofed `X-Forwarded-For` headers, and API response inconsistencies. See
+`PROJECT_UPGRADE_REPORT.md` for the detailed changelog.
+
+**Report structure** (9 chapters): Preface, Literature Review, Dataset
+Analysis, Theories/Algorithms, Proposed Framework & Methodology,
+Technology Used, Implementation & Results, Conclusion, References.
+
+## Features at a glance
+
+- Single URL check (`POST /api/check`) and bulk checking (paste up to 50
+  URLs, or upload a `.txt`/`.csv` file up to 75 URLs) with CSV/Excel export
+- Browser extension that auto-checks every page you browse to
+- Developer-only hot-reload endpoint for swapping in a retrained model
+  without downtime
+- Regression test suite that pins down previously-misclassified real sites
+  (`perplexity.ai`, `discord.com`, `india.gov.in`, `icici.bank.in`, etc.)
+
+## How to download and run this on your own computer
+
+These steps assume no prior setup — just a computer with internet access.
+
+### 1. Install prerequisites
+
+- **Git**: [git-scm.com/downloads](https://git-scm.com/downloads)
+- **Python 3.10+**: [python.org/downloads](https://python.org/downloads) —
+  on Windows, tick "Add Python to PATH" during install.
+
+Verify both installed correctly by opening a terminal (Command Prompt,
+PowerShell, or Terminal on Mac/Linux) and running:
 
 ```bash
-curl -X POST http://localhost:8000/api/bulk-check-paste \
-  -H "Content-Type: application/json" \
-  -d '{"text": "https://example.com/\nhttps://sbl.co.in/"}'
+git --version
+python --version
 ```
 
-`POST /api/admin/reload` remains developer-only, gated by the same
-auto-generated `X-Dev-Key` (see `config/dev_key.txt`, gitignored) as
-before — it hot-swaps the model/lists after a retrain without a restart.
+### 2. Download the project from GitHub
 
-## Browser extension (auto-checks every site you visit)
+```bash
+git clone https://github.com/<your-username>/<your-repo-name>.git
+cd <your-repo-name>
+```
 
-The `extension/` folder is a Manifest V3 Chrome extension that checks every
-site you navigate to, automatically, before it loads — see
-`extension/README.md` for what each file does and how to load it.
+(Replace the URL with this project's actual GitHub repository URL. If you
+don't have it in GitHub yet, this project's own README section above
+under "Browser extension" explains how to push it there first.)
 
-**It needs a backend it can reach over the internet** (not `localhost` —
-that only works while your PC is on and the server running). Deploy to
-Render's free tier:
+### 3. Create a virtual environment (recommended)
 
-1. **Push this project to GitHub** (if you haven't already):
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   ```
-   Create a new repo on github.com, then follow its "push an existing
-   repository" instructions to connect and push.
+```bash
+python -m venv venv
+```
 
-2. **Sign up at [render.com](https://render.com)** (free, no credit card needed for the free tier) — sign in with GitHub for the easiest setup.
+Activate it:
 
-3. **New → Web Service** → connect your GitHub repo. Render should
-   auto-detect the `render.yaml` in this project and pre-fill the build/start
-   commands. If not, set them manually:
-   - Build command: `pip install -r requirements.txt`
-   - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Windows (PowerShell): `venv\Scripts\Activate.ps1`
+- Windows (cmd.exe): `venv\Scripts\activate.bat`
+- Mac/Linux: `source venv/bin/activate`
 
-4. **(Optional) Set an environment variable** `PHISHING_DETECTOR_DEV_KEY` to
-   a password of your choice, so `/api/admin/reload` works on the deployed
-   version with a key you control (otherwise one gets auto-generated per
-   deploy and printed in Render's logs, which is less convenient to find
-   repeatedly). Bulk checking itself is public and needs no key.
-
-5. **Deploy.** Render gives you a URL like `https://phishing-detector-xyz.onrender.com`.
-   Free tier spins down after ~15 min idle — the first request after that
-   can take 20-60 seconds while it wakes back up; after that it's normal speed.
-
-6. **Test it**: visit `https://your-url.onrender.com/health` in a browser —
-   should show `{"status":"ok","model_version":"..."}`.
-
-7. **Point the extension at it**: load the extension (see
-   `extension/README.md`), open its Settings, paste your Render URL into
-   "Backend URL", save.
-
-## Setup
+### 4. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-`requirements.txt` is runtime-only (what the deployed app needs to serve
-traffic). For local development, also install the test tooling:
-
-```bash
-pip install -r requirements-dev.txt
-```
-
-(this pulls in `requirements.txt` too, so one command covers both.)
-
-## Train
-
-```bash
-python models/train.py
-```
-
-Reads PhiUSIIL's raw URLs from `dataset/PhiUSIIL_Phishing_URL_Dataset.csv`
-(override the location with the `PHISHING_DETECTOR_DATASET` env var),
-extracts features via `core/features.py` (the single canonical
-implementation), augments the training split with real benign-with-path
-URLs (see `core/augmentation_data.py`'s module docstring), fits one
-bundled sklearn Pipeline, and writes a versioned artifact to
-`models/artifacts/` plus a `current.json` pointer.
-
-## Serve
+### 5. Run the server
 
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-Visit `http://localhost:8000/`. `POST /api/check {"url": "..."}` returns
-`{checked_url, status, verdict, stage, confidence, model_version}` —
-`status` is `"ok"` or `"invalid"` (non-URL input; `verdict` is null and a
-user-facing `message` explains why).
+### 6. Use it
 
-## Test
+Open a browser and go to:
+
+```
+http://localhost:8000/
+```
+
+You'll see the web UI where you can paste a single URL, or click the **+**
+next to the search bar to bulk-check multiple URLs at once (paste a list,
+or upload a `.txt`/`.csv` file).
+
+### 7. (Optional) Retrain the model yourself
+
+If you want to reproduce the training pipeline instead of using the
+committed model artifact:
 
 ```bash
+python models/train.py
+```
+
+This reads `dataset/PhiUSIIL_Phishing_URL_Dataset.csv`, extracts features,
+trains a fresh model, and saves a new versioned artifact under
+`models/artifacts/`.
+
+### 8. (Optional) Install the browser extension
+
+Load `extension/` as an unpacked Manifest V3 extension in Chrome
+(`chrome://extensions` → enable Developer Mode → "Load unpacked" → select
+the `extension/` folder). By default it needs a backend reachable over the
+internet, not `localhost` — see the "Browser extension" section of the
+project's technical documentation (or `extension/README.md`) for deploying
+a free always-on backend via Render.
+
+### 9. Run the test suite (optional, for developers)
+
+```bash
+pip install -r requirements-dev.txt
 pytest tests/ -v
-```
-
-`test_regression_known_sites.py` is the CI gate — it includes the exact
-URLs that were wrong in the legacy system (`perplexity.ai`, `discord.com`,
-`india.gov.in`, `icici.bank.in`) plus more known-benign sites and synthetic
-suspicious-structure cases. A failure here should block deploy.
-`test_feature_parity.py` guards against training and serving code ever
-forking apart again.
-
-## Project layout
-
-```
-core/features.py       single source of truth for URL -> features
-core/registry.py        versioned model loading, absolute paths only
-core/lists.py            allowlist/blocklist, config-driven
-core/typosquat.py        brand-similarity detection (e.g. sbl.co.in vs sbi.co.in)
-core/wordplay.py          general character-substitution/homoglyph detection
-core/wordplay_training_data.py   synthetic training data for the above
-core/auth.py             dev-key auth for /api/admin/reload (bulk checking is public)
-config/*.json            seed lists (replace with live feeds in prod)
-models/train.py          training script
-models/evaluate.py        realistic held-out evaluation (see its docstring)
-models/artifacts/        versioned model + metadata - committed to git
-                          (Render needs these to serve without retraining;
-                          check this folder before each commit and remove
-                          stale generations)
-app/main.py               FastAPI serving layer + API
-app/static/                the actual HTML/CSS/JS the app serves
-extension/                 the browser extension (Manifest V3)
-tests/                    regression + parity tests
-.github/workflows/         CI - runs pytest on every push/PR
-requirements.txt           runtime dependencies only
-requirements-dev.txt       adds test tooling for local development
-runtime.txt                pins the Python version
-render.yaml                Render deploy blueprint (build/start commands, env vars)
-PROJECT_UPGRADE_REPORT.md  changelog of the 2026-07 audit-and-upgrade pass
 ```
